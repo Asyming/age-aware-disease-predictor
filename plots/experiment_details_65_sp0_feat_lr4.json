@@ -1,0 +1,282 @@
+{
+    "ad_age65": {
+        "baseline_teacher": {
+            "auprc": 0.09331838627293436,
+            "details": [
+                {
+                    "mode": "teacher",
+                    "model": "MLP",
+                    "auprc": 0.09331838627293436
+                }
+            ]
+        },
+        "baseline_student": {
+            "auprc": 0.07939686123729262,
+            "details": [
+                {
+                    "mode": "student",
+                    "model": "MLP->MLP",
+                    "auprc": 0.07939686123729262
+                }
+            ]
+        },
+        "age1_teacher": {
+            "auprc": 0.08759349529615007,
+            "details": [
+                {
+                    "mode": "teacher",
+                    "model": "AgeAwareMLP1",
+                    "auprc": 0.08759349529615007
+                }
+            ]
+        },
+        "age1_student_age1": {
+            "auprc": 0.08403501532536295,
+            "details": [
+                {
+                    "mode": "student",
+                    "model": "AgeAwareMLP1->AgeAwareMLP1",
+                    "auprc": 0.08403501532536295
+                }
+            ]
+        },
+        "age1_student_mlp": {
+            "auprc": 0.09189937517861821,
+            "details": [
+                {
+                    "mode": "student",
+                    "model": "AgeAwareMLP1->MLP",
+                    "auprc": 0.09189937517861821
+                }
+            ]
+        },
+        "age2_teacher": {
+            "auprc": 0.08861644066911058,
+            "details": [
+                {
+                    "mode": "teacher",
+                    "model": "AgeAwareMLP2",
+                    "auprc": 0.08861644066911058
+                }
+            ]
+        },
+        "age2_student_age2": {
+            "auprc": 0.09663829320121871,
+            "details": [
+                {
+                    "mode": "student",
+                    "model": "AgeAwareMLP2->AgeAwareMLP2",
+                    "auprc": 0.09663829320121871
+                }
+            ]
+        },
+        "age2_student_mlp": {
+            "auprc": 0.0709720230314015,
+            "details": [
+                {
+                    "mode": "student",
+                    "model": "AgeAwareMLP2->MLP",
+                    "auprc": 0.0709720230314015
+                }
+            ]
+        }
+    },
+    "ad_age0": {
+        "baseline_teacher": {
+            "auprc": 0,
+            "details": []
+        },
+        "baseline_student": {
+            "auprc": 0,
+            "details": []
+        },
+        "age1_teacher": {
+            "auprc": 0,
+            "details": []
+        },
+        "age1_student_age1": {
+            "auprc": 0,
+            "details": []
+        },
+        "age1_student_mlp": {
+            "auprc": 0,
+            "details": []
+        },
+        "age2_teacher": {
+            "auprc": 0,
+            "details": []
+        },
+        "age2_student_age2": {
+            "auprc": 0,
+            "details": []
+        },
+        "age2_student_mlp": {
+            "auprc": 0,
+            "details": []
+        }
+    },
+    "ms_age65": {
+        "baseline_teacher": {
+            "auprc": 0.04209643828429936,
+            "details": [
+                {
+                    "mode": "teacher",
+                    "model": "MLP",
+                    "auprc": 0.04209643828429936
+                }
+            ]
+        },
+        "baseline_student": {
+            "auprc": 0.03890918330444866,
+            "details": [
+                {
+                    "mode": "student",
+                    "model": "MLP->MLP",
+                    "auprc": 0.03890918330444866
+                }
+            ]
+        },
+        "age1_teacher": {
+            "auprc": 0.044743422773812325,
+            "details": [
+                {
+                    "mode": "teacher",
+                    "model": "AgeAwareMLP1",
+                    "auprc": 0.044743422773812325
+                }
+            ]
+        },
+        "age1_student_age1": {
+            "auprc": 0.045091713178582654,
+            "details": [
+                {
+                    "mode": "student",
+                    "model": "AgeAwareMLP1->AgeAwareMLP1",
+                    "auprc": 0.045091713178582654
+                }
+            ]
+        },
+        "age1_student_mlp": {
+            "auprc": 0.04657865828153289,
+            "details": [
+                {
+                    "mode": "student",
+                    "model": "AgeAwareMLP1->MLP",
+                    "auprc": 0.04657865828153289
+                }
+            ]
+        },
+        "age2_teacher": {
+            "auprc": 0.04906765936405569,
+            "details": [
+                {
+                    "mode": "teacher",
+                    "model": "AgeAwareMLP2",
+                    "auprc": 0.04906765936405569
+                }
+            ]
+        },
+        "age2_student_age2": {
+            "auprc": 0.0468198135796221,
+            "details": [
+                {
+                    "mode": "student",
+                    "model": "AgeAwareMLP2->AgeAwareMLP2",
+                    "auprc": 0.0468198135796221
+                }
+            ]
+        },
+        "age2_student_mlp": {
+            "auprc": 0.049469206183907426,
+            "details": [
+                {
+                    "mode": "student",
+                    "model": "AgeAwareMLP2->MLP",
+                    "auprc": 0.049469206183907426
+                }
+            ]
+        }
+    },
+    "uc_age65": {
+        "baseline_teacher": {
+            "auprc": 0.08510009870280438,
+            "details": [
+                {
+                    "mode": "teacher",
+                    "model": "MLP",
+                    "auprc": 0.08510009870280438
+                }
+            ]
+        },
+        "baseline_student": {
+            "auprc": 0.07598768943545894,
+            "details": [
+                {
+                    "mode": "student",
+                    "model": "MLP->MLP",
+                    "auprc": 0.07598768943545894
+                }
+            ]
+        },
+        "age1_teacher": {
+            "auprc": 0.09174690538284151,
+            "details": [
+                {
+                    "mode": "teacher",
+                    "model": "AgeAwareMLP1",
+                    "auprc": 0.09174690538284151
+                }
+            ]
+        },
+        "age1_student_age1": {
+            "auprc": 0.09156251107869619,
+            "details": [
+                {
+                    "mode": "student",
+                    "model": "AgeAwareMLP1->AgeAwareMLP1",
+                    "auprc": 0.09156251107869619
+                }
+            ]
+        },
+        "age1_student_mlp": {
+            "auprc": 0.08998748430226788,
+            "details": [
+                {
+                    "mode": "student",
+                    "model": "AgeAwareMLP1->MLP",
+                    "auprc": 0.08998748430226788
+                }
+            ]
+        },
+        "age2_teacher": {
+            "auprc": 0.09067587590144326,
+            "details": [
+                {
+                    "mode": "teacher",
+                    "model": "AgeAwareMLP2",
+                    "auprc": 0.09067587590144326
+                }
+            ]
+        },
+        "age2_student_age2": {
+            "auprc": 0.09342963177718189,
+            "details": [
+                {
+                    "mode": "student",
+                    "model": "AgeAwareMLP2->AgeAwareMLP2",
+                    "auprc": 0.09342963177718189
+                }
+            ]
+        },
+        "age2_student_mlp": {
+            "auprc": 0.08656254182676222,
+            "details": [
+                {
+                    "mode": "student",
+                    "model": "AgeAwareMLP2->MLP",
+                    "auprc": 0.08656254182676222
+                }
+            ]
+        }
+    }
+}

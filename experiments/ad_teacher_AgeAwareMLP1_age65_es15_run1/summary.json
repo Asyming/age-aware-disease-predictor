@@ -1,0 +1,10 @@
+{
+    "teacher": {
+        "auprc_mean": 0.08292850644693013,
+        "auprc_std": 0.0
+    },
+    "student": {
+        "auprc_mean": null,
+        "auprc_std": null
+    }
+}
