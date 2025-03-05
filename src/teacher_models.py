@@ -43,11 +43,13 @@ class MLP(nn.Module):
     def forward(self, x):
         preds = self.model(x)
         return preds
+
 class AgeAwareMLP1(MLP):
     """MLP model with age-aware layer and adversarial training"""
-    def __init__(self, d_input, d_hidden, use_adversarial=True):
+    def __init__(self, d_input, d_hidden, use_adversarial=True, use_consist=True):
         super().__init__(d_input, d_hidden)
         self.use_adversarial = use_adversarial
+        self.use_consist = use_consist
         self.age_layer = nn.Sequential(
             nn.Linear(1, 8),
             nn.BatchNorm1d(8),
@@ -73,17 +75,19 @@ class AgeAwareMLP1(MLP):
             nn.ReLU(),
             nn.Dropout(0.5),
 
-            nn.Linear(4, 1)
+            nn.Linear(4, 1),
+            nn.Sigmoid()
         )
         
         with torch.no_grad():
             nn.init.normal_(self.age_layer[-1].weight, mean=0, std=0.01)
             self.age_layer[-1].bias.data.copy_(torch.tensor([0., 1.]))
+
     def get_transition_matrix(self, age_norm):
         if age_norm.dim() == 1:
             age_norm = age_norm.unsqueeze(1)
 
-        age_ori = age_norm * (72 - 37) + 37
+        age_ori = age_norm * (70 - 40) + 40
         
         pos_trans = self.age_layer(age_norm)
         pos_probs = F.softmax(pos_trans, dim=1)
@@ -92,14 +96,12 @@ class AgeAwareMLP1(MLP):
             print(f"Age: {age_ori[0].item():.1f}")
             print(f"Before softmax: {pos_trans[0]}")
             print(f"After softmax: {pos_probs[0]}")
-
         batch_size = age_norm.shape[0]
         trans_matrix = torch.zeros(batch_size, 2, 2, device=age_norm.device)
         trans_matrix[:, 0, 0] = 1.0    # p00 = 1.0
         trans_matrix[:, 0, 1] = 0.0    # p01 = 0.0
         trans_matrix[:, 1, 0] = pos_probs[:, 0]  #.clamp(0, 0.5) # p10
         trans_matrix[:, 1, 1] = pos_probs[:, 1]  # p11
-        
         return trans_matrix
 
     def forward(self, x, age=None, labels=None):
@@ -115,12 +117,15 @@ class AgeAwareMLP1(MLP):
             if i == 6:
                 features = x
 
-        age_norm = (age - 37) / (72 - 37)
+        age_norm = (age - 40) / (70 - 40)
+        consist_weight = 0.0
+        age_weight = 0.0
 
         if self.use_adversarial:
             features_rev = GradientReverseLayer.apply(features, 0.001)
             age_pred = self.age_predictor(features_rev)
-            age_loss = F.mse_loss(age_pred.squeeze(), age_norm)
+            age_weight = 0.5
+            age_loss = F.l1_loss(age_pred.squeeze(), age_norm)
         else:
             age_loss = 0.0
         
@@ -131,16 +136,25 @@ class AgeAwareMLP1(MLP):
         neg_dist = torch.cat([1 - original_probs, original_probs], dim=1)
         updated_dist = torch.bmm(neg_dist.unsqueeze(1), trans_matrix)
         updated_probs = updated_dist.squeeze(1)[:, 1:2]
-        consistency_loss = F.mse_loss(original_probs[labels==1], updated_probs[labels==1])
+        consistency_loss = F.binary_cross_entropy(updated_probs[labels==1], original_probs[labels==1])
 
         final_probs = (1 - neg_mask) * original_probs + neg_mask * updated_probs
         final_logits = torch.log(final_probs / (1 - final_probs + 1e-7))
-        final_loss = 1.0 * consistency_loss + 0.5 * age_loss
+
+
+        if self.use_consist:
+            consist_weight = 1.0
+            
+        final_loss = consist_weight * consistency_loss + age_weight * age_loss
         return final_logits, original_logits, final_loss
+
 class AgeAwareMLP2(MLP):
     """MLP model with feature disentanglement for age-related features"""
-    def __init__(self, d_input, d_hidden):
+    def __init__(self, d_input, d_hidden, use_ageloss=True, use_disentangle=True, use_consist=True):
         super().__init__(d_input, d_hidden)
+        self.use_ageloss = use_ageloss
+        self.use_disentangle = use_disentangle
+        self.use_consist = use_consist
         self.feature_dim = 16
         self.main_dim = 15
         self.age_dim = 1
@@ -182,11 +196,12 @@ class AgeAwareMLP2(MLP):
         main_feat = x[:, :self.main_dim]
         age_feat = x[:, self.main_dim:]
         return main_feat, age_feat
+
     def get_transition_matrix(self, age_norm, age_feat):
         if age_norm.dim() == 1:
             age_norm = age_norm.unsqueeze(1)
 
-        age_ori = age_norm * (72 - 37) + 37
+        age_ori = age_norm * (70 - 40) + 40
 
         combined_input = torch.cat([age_norm, age_feat], dim=1)
         pos_trans = self.age_layer(combined_input)
@@ -205,6 +220,7 @@ class AgeAwareMLP2(MLP):
         trans_matrix[:, 1, 1] = pos_probs[:, 1] # p11
         
         return trans_matrix
+
     def forward(self, x, age=None, labels=None):
         main_feat, age_feat = self.get_intermediate_features(x)
         
@@ -213,9 +229,9 @@ class AgeAwareMLP2(MLP):
         if age is None or labels is None:
             return original_logits
 
-        age_norm = (age - 37) / (72 - 37)
+        age_norm = (age - 40) / (70 - 40)
         age_pred = self.age_predictor(age_feat)
-        age_loss = F.mse_loss(age_pred.squeeze(), age_norm)
+        age_loss = F.l1_loss(age_pred.squeeze(), age_norm)
         
         batch_size = main_feat.size(0)
         main_feat_normalized = F.normalize(main_feat, dim=1)
@@ -229,13 +245,23 @@ class AgeAwareMLP2(MLP):
         neg_dist = torch.cat([1 - original_probs, original_probs], dim=1)
         updated_dist = torch.bmm(neg_dist.unsqueeze(1), trans_matrix)
         updated_probs = updated_dist.squeeze(1)[:, 1:2]
-        consistency_loss = F.mse_loss(original_probs[labels==1], updated_probs[labels==1])
+        consistency_loss = F.binary_cross_entropy(updated_probs[labels==1], original_probs[labels==1])
 
         final_probs = (1 - neg_mask) * original_probs + neg_mask * updated_probs
         final_logits = torch.log(final_probs / (1 - final_probs + 1e-7))
-        final_loss = (1.0 * consistency_loss + 
-                    0.5 * age_loss + 
-                    0.5 * disentangle_loss)
+        
+        consist_weight = 0.0
+        age_weight = 0.0
+        disentangle_weight = 0.0
+
+        if self.use_consist:
+            consist_weight = 1.0
+        if self.use_ageloss:
+            age_weight = 0.5
+        if self.use_disentangle:
+            disentangle_weight = 0.5
+
+        final_loss = consist_weight * consistency_loss + age_weight * age_loss + disentangle_weight * disentangle_loss
 
         return final_logits, original_logits, final_loss
     
@@ -244,8 +270,8 @@ class AgeAwareMLP3(MLP):
     def __init__(self, d_input, d_hidden):
         super().__init__(d_input, d_hidden)
         
-        self.min_age = 37
-        self.max_age = 72
+        self.min_age = 40
+        self.max_age = 70
         self.n_ages = self.max_age - self.min_age + 1
         
         self.age_layer = nn.Sequential(

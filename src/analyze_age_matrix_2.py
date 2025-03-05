@@ -60,8 +60,8 @@ def analyze_transition_matrix(model, dataloader, save_dir, exp_name, device):
     """分析转移矩阵"""
     if isinstance(model, AgeAwareMLP1):
         results = {'ages': [], 'matrices': []}
-        all_ages = torch.arange(37, 73, dtype=torch.float32, device=device)
-        all_ages_normed = (all_ages - 37) / (72 - 37)
+        all_ages = torch.arange(40, 71, dtype=torch.float32, device=device)
+        all_ages_normed = (all_ages - 40) / (70 - 40)
         
         with torch.no_grad():
             for age, age_normed in zip(all_ages, all_ages_normed):
@@ -105,7 +105,7 @@ def analyze_transition_matrix(model, dataloader, save_dir, exp_name, device):
             for feats, _, ages in dataloader:
                 feats = feats.to(device)
                 ages = ages.to(device)
-                age_norm = (ages - 37) / (72 - 37)
+                age_norm = (ages - 40) / (70 - 40)
                 _, age_feat = model.get_intermediate_features(feats)
                 trans_matrix = model.get_transition_matrix(age_norm, age_feat)
                 matrices = trans_matrix.cpu().squeeze().numpy()
@@ -125,7 +125,7 @@ def analyze_transition_matrix(model, dataloader, save_dir, exp_name, device):
             age_stats[age]['P11'].append(matrix[1][1])
         
         stats = {}
-        for age in range(37, 73):
+        for age in range(40, 71):
             stats[age] = {
                 'P00': {'mean': np.nan, 'std': np.nan},
                 'P01': {'mean': np.nan, 'std': np.nan},
@@ -149,7 +149,7 @@ def analyze_transition_matrix(model, dataloader, save_dir, exp_name, device):
         
         for i, (prob_key, label, title) in enumerate(transitions):
             plt.subplot(2, 2, i+1)
-            ages = np.arange(37, 73)
+            ages = np.arange(40, 71)
             means = [stats[age][prob_key]['mean'] for age in ages]
             stds = [stats[age][prob_key]['std'] for age in ages]
             valid = ~np.isnan(means)
@@ -163,7 +163,7 @@ def analyze_transition_matrix(model, dataloader, save_dir, exp_name, device):
             plt.grid(alpha=0.3)
             plt.ylim(-0.05, 1.05)
         
-        plt.suptitle(f"{exp_name} (Age Range: 37-72)", y=1.01)
+        plt.suptitle(f"{exp_name} (Age Range: 40-70)", y=1.01)
         plt.tight_layout()
         plt.savefig(os.path.join(save_dir, 'transition_matrix_stats.png'),
                     bbox_inches='tight', dpi=300)

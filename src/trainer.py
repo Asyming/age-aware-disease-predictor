@@ -163,7 +163,7 @@ class Trainer:
         # Evaluate training set
         if train_eval_loader is not None:
             print("\nLoading best model and evaluating training set...")
-            checkpoint = torch.load(os.path.join(self.save_dir, f'{self.model_name}.pth'), map_location=self.device)
+            checkpoint = torch.load(os.path.join(self.save_dir, f'{self.model_name}.pth'), map_location=self.device, weights_only=False)
             self.model.load_state_dict(checkpoint['model_state_dict'])
             train_metrics = self.evaluate(train_eval_loader, desc="Evaluating training set:")
             checkpoint['train_metrics'] = train_metrics
@@ -171,14 +171,14 @@ class Trainer:
             print("Evaluation complete and results saved.")
         else:
             print("No train_eval_loader provided. Skipping training set evaluation.")
-            checkpoint = torch.load(os.path.join(self.save_dir, f'{self.model_name}.pth'))
+            checkpoint = torch.load(os.path.join(self.save_dir, f'{self.model_name}.pth'), map_location=self.device, weights_only=False)
         return checkpoint
 
 class KDTrainer(Trainer):
     def __init__(self, model, teacher_model, criterion, optimizer, device, model_name, teacher_model_path, save_dir, eval_interval=10, n_steps=20000, n_early_stop=10, log_interval=20, norm_weight=1.0):
         super().__init__(model, criterion, optimizer, device, model_name, save_dir, norm_weight=norm_weight, eval_interval=eval_interval, n_steps=n_steps, n_early_stop=n_early_stop, log_interval=log_interval)
         # Load the best teacher model
-        teacher_ckpt = torch.load(teacher_model_path, map_location=device)
+        teacher_ckpt = torch.load(teacher_model_path, map_location=device, weights_only=False)
         teacher_model.load_state_dict(teacher_ckpt['model_state_dict'])
         self.teacher_model = teacher_model.to(device)
         self.teacher_model.eval()
