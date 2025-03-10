@@ -1,3 +1,5 @@
+Split id: 0
+
 AD Distribution:
 Train set: 312687 samples
 Pos/Neg: 1848/310839

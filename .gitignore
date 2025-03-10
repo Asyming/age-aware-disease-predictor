@@ -1,1 +1,6 @@
 data/
+*.png
+*.csv
+*.pth
+plots/
+experiments/

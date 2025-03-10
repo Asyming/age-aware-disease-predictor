@@ -1,13 +1,8 @@
 import numpy as np
 import random
 import torch
-import matplotlib
-matplotlib.use('Agg')
-import matplotlib.pyplot as plt
 from sklearn.metrics import precision_recall_curve
 import os
-import pandas as pd
-import seaborn as sns
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
 
@@ -32,7 +27,9 @@ def collate_fn(batch):
     labels = torch.FloatTensor([sample['label'] for sample in batch]).reshape(-1, 1)
     ages = torch.FloatTensor([sample['age'] for sample in batch]).reshape(-1, 1)
     return feats, labels, ages
+
 def split_by_age(labels, ages, age_threshold, n_splits=6):
+    """Create train/val/test splits by age"""
     seeds = [20 + i for i in range(n_splits)]
     splits = []
     pos_indexs = np.where(labels == 1)[0]
@@ -71,6 +68,22 @@ def split_by_age(labels, ages, age_threshold, n_splits=6):
     
     return splits
 
+def generate_cumulative_ages(original_tensor, mask, max_age=70, min_age=40):
+    """Generate cumulative ages"""
+    mask = mask.bool()
+    device = original_tensor.device
+    mask = mask.to(device)
+    
+    upper_bounds = torch.where(mask, max_age, original_tensor)
+    lower_bounds = torch.where(mask, original_tensor, min_age)
+    ranges = upper_bounds - lower_bounds + 1
+    
+    rand = torch.rand(original_tensor.shape, device=device)
+    random_offsets = (rand * ranges.float()).long()
+    cumulative_ages = lower_bounds + random_offsets
+
+    return cumulative_ages
+
 def plot_pr_curves(results_bce, results_kd, run_id, save_path):
     """Plot and save PR curves"""
     plt.figure(figsize=(10, 8))
@@ -98,77 +111,6 @@ def plot_pr_curves(results_bce, results_kd, run_id, save_path):
     plt.savefig(f'{save_path}/pr_curves_run_{run_id}.png', dpi=300, bbox_inches='tight')
     plt.close()
 
-def plot_prediction_distribution(teacher_results, student_results, noise_indices, train_indices, run_id, save_path, filename=None):
-    plt.figure(figsize=(15, 6))
-    plt.subplot(1, 2, 1)
-    train_logits = teacher_results['train_metrics']['predictions'].squeeze()
-    train_probs = 1 / (1 + np.exp(-train_logits))
-    noise_mask = np.isin(train_indices, noise_indices)
-
-    sorted_indices = np.argsort(train_probs)[::-1]
-    sorted_probs = train_probs[sorted_indices]
-    sorted_mask = noise_mask[sorted_indices]
-    
-    x_coords = np.arange(len(sorted_probs))
-    plt.vlines(x_coords[~sorted_mask], ymin=0, ymax=sorted_probs[~sorted_mask], 
-              colors='lightgray', alpha=0.8, linewidth=0.1)
-    plt.vlines(x_coords[sorted_mask], ymin=0, ymax=sorted_probs[sorted_mask], 
-              colors='red', alpha=0.8, linewidth=0.1)
-    
-    threshold_idx = np.searchsorted(sorted_probs[::-1], 0.5)
-    threshold_idx = len(sorted_probs) - threshold_idx
-
-    plt.axvline(x=threshold_idx, color='gray', linestyle='--', alpha=0.5)
-    
-    plt.title('Teacher Model Training Set Predictions')
-    plt.xlabel('Sorted Sample Index')
-    plt.ylabel('Prediction Probability')
-    plt.legend(['Normal samples', 'Label-noise samples'])
-    plt.grid(True, alpha=0.3)
-    plt.ylim(-0.05, 1.05)
-    plt.subplot(1, 2, 2)
-    train_logits = student_results['train_metrics']['predictions'].squeeze()
-    train_probs = 1 / (1 + np.exp(-train_logits))
-    
-    sorted_indices = np.argsort(train_probs)[::-1]
-    sorted_probs = train_probs[sorted_indices]
-    sorted_mask = noise_mask[sorted_indices]
-    
-    x_coords = np.arange(len(sorted_probs))
-    plt.vlines(x_coords[~sorted_mask], ymin=0, ymax=sorted_probs[~sorted_mask], 
-              colors='lightgray', alpha=0.8, linewidth=0.1)
-    plt.vlines(x_coords[sorted_mask], ymin=0, ymax=sorted_probs[sorted_mask], 
-              colors='red', alpha=0.8, linewidth=0.1)
-    
-    threshold_idx = np.searchsorted(sorted_probs[::-1], 0.5)
-    threshold_idx = len(sorted_probs) - threshold_idx
-    plt.axvline(x=threshold_idx, color='gray', linestyle='--', alpha=0.5)
-    
-    plt.title('Student Model Training Set Predictions')
-    plt.xlabel('Sorted Sample Index')
-    plt.ylabel('Prediction Probability')
-    plt.legend(['Normal samples', 'Label-noise samples'])
-    plt.grid(True, alpha=0.3)
-    plt.ylim(-0.05, 1.05)
-    
-    plt.tight_layout()
-    
-    if filename is None:
-        filename = f'pred_dist_run_{run_id}.png'
-    plt.savefig(os.path.join(save_path, filename), dpi=300, bbox_inches='tight')
-    plt.close()
-    
-    print("\nTraining Set Distribution Statistics:")
-    for model in ['Teacher', 'Student']:
-        logits = (teacher_results['train_metrics']['predictions'] if model == 'Teacher' 
-                 else student_results['train_metrics']['predictions'])
-        probs = 1 / (1 + np.exp(-logits.squeeze()))
-        
-        print(f"\n{model} Model:")
-        print(f"Noise samples (original pos, labeled as neg):")
-        print(f"Mean prob: {probs[noise_mask].mean():.3f}")
-        print(f"Samples with prob > 0.5: {np.sum((probs > 0.5) & noise_mask)}/{np.sum(noise_mask)}")
-
 def check_cuda():
     """Check CUDA availability and print device information"""
     print(f"CUDA available: {torch.cuda.is_available()}")
@@ -184,6 +126,7 @@ def check_age_distribution(info_df, train_indices, test_indices):
     print(f"Test age range: {info_df.loc[test_indices, 'age'].min():.1f} - {info_df.loc[test_indices, 'age'].max():.1f}")
 
 def preprocess_data(data_dir, info_df, train_indices, n_components=1000, save_dir=None):
+    """Preprocess data"""
     print("Loading training data...")
     train_data = []
     for sample_id in info_df['sample_id'].iloc[train_indices]:
@@ -222,6 +165,7 @@ def preprocess_data(data_dir, info_df, train_indices, n_components=1000, save_di
     return scaler, pca
 
 def standardize_features(data_dir, info_df, train_indices, val_indices, test_indices, save_dir=None):
+    """Standardize features"""
     def process_dataset(name, indices):
         print(f"\nProcessing {name} set...")
         data = []
@@ -248,3 +192,41 @@ def standardize_features(data_dir, info_df, train_indices, val_indices, test_ind
     process_dataset('train', train_indices)
     process_dataset('validation', val_indices)
     process_dataset('test', test_indices)
+
+
+# gradient clipping
+class GradientQueue:
+    def __init__(self, maxlen=10):
+        self.queue = []
+        self.maxlen = maxlen
+        
+    def add(self, value):
+        if len(self.queue) >= self.maxlen:
+            self.queue.pop(0)
+        self.queue.append(value)
+        
+    def mean(self):
+        if not self.queue:
+            return 1.0
+        return np.mean(self.queue)
+    
+    def std(self):
+        if len(self.queue) <= 1:
+            return 0.0
+        return np.std(self.queue)
+
+def gradient_clipping(model, gradnorm_queue):
+    # allow 200% + 3 * std
+    max_grad_norm = 2.0 * gradnorm_queue.mean() + 3 * gradnorm_queue.std()
+    grad_norm = torch.nn.utils.clip_grad_norm_(
+        model.parameters(), max_norm=max_grad_norm, norm_type=2.0)
+
+    if float(grad_norm) > max_grad_norm:
+        gradnorm_queue.add(float(max_grad_norm))
+    else:
+        gradnorm_queue.add(float(grad_norm))
+
+    if float(grad_norm) > max_grad_norm:
+        print(f'Clipped gradient with value {grad_norm:.2f}, '
+              f'allowed maximum value is {max_grad_norm:.2f}')
+    return grad_norm

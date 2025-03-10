@@ -10,7 +10,7 @@ import pandas as pd
 import numpy as np
 import json
 
-from src.teacher_models import MLP, AgeAwareMLP1, AgeAwareMLP2, AgeAwareMLP3
+from src.teacher_models import MLP, AgeAwareMLP1, AgeAwareMLP2
 from src.dataset import Dataset
 from src.loss import KDLoss
 from src.trainer import Trainer, KDTrainer
@@ -34,25 +34,30 @@ def parse_args():
     parser.add_argument("--alpha", type=float, default=0.1)
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--num_workers", type=int, default=8)
-    # parser.add_argument("--splitid", type=int, default=2)
     parser.add_argument("--n_runs", type=int, default=20)
     parser.add_argument("--eval_interval", type=int, default=50)
     parser.add_argument("--log_interval", type=int, default=50)
     parser.add_argument("--n_early_stop", type=int, default=20)
     parser.add_argument("--n_steps", type=int, default=20000)
     parser.add_argument("--mode", type=str, choices=["teacher", "student"], required=True)
-    #parser.add_argument("--teacher_model_path", type=str, default=None)
+    parser.add_argument("--teacher_model_exp_name", type=str, default=None)
+    parser.add_argument("--teacher_model_es", type=int, default=20)
+    parser.add_argument("--teacher_model_eval", type=int, default=50)
+    parser.add_argument("--teacher_model_lr", type=float, default=1e-4)
     #parser.add_argument("--initialize_teacher_from_baseline", action='store_true', help="If need to initialize teacher from baseline weights")
-    parser.add_argument("--teacher_type", type=str, default="MLP", choices=["MLP", "AgeAwareMLP1", "AgeAwareMLP2", "AgeAwareMLP3"])
-    parser.add_argument("--student_type", type=str, default=None, choices=["MLP", "AgeAwareMLP1", "AgeAwareMLP2", "AgeAwareMLP3"])
+    parser.add_argument("--teacher_type", type=str, default="MLP", choices=["MLP", "AgeAwareMLP1", "AgeAwareMLP2"])
+    parser.add_argument("--student_type", type=str, default=None, choices=["MLP", "AgeAwareMLP1", "AgeAwareMLP2"])
 
     # for ablation study
-    parser.add_argument("--age1_use_consist", type=bool, default=True)
-    parser.add_argument("--age1_use_adversarial", type=bool, default=True)
+    parser.add_argument("--age1_use_consist", type=lambda x: x.lower() == 'true', default=True)
+    parser.add_argument("--age1_use_adversarial", type=lambda x: x.lower() == 'true', default=True)
 
-    parser.add_argument("--age2_use_consist", type=bool, default=True)
-    parser.add_argument("--age2_use_ageloss", type=bool, default=True)
-    parser.add_argument("--age2_use_disentangle", type=bool, default=True)
+    parser.add_argument("--age2_use_consist", type=lambda x: x.lower() == 'true', default=True)
+    parser.add_argument("--age2_use_ageloss", type=lambda x: x.lower() == 'true', default=True)
+    parser.add_argument("--age2_use_disentangle", type=lambda x: x.lower() == 'true', default=True)
+
+    # auxiliary tools
+    parser.add_argument("--use_cumulative_rate", action='store_true', help='')
 
     return parser.parse_args()
 
@@ -84,8 +89,6 @@ def run_experiment(args):
     
     for run in range(1, args.n_runs + 1):
         print(f"\nRun {run}/{args.n_runs}")
-        
-
         train_indices, val_indices, test_indices = splits_list[run-1]
 
         print(f"\nSplit {run} Data Distribution:")
@@ -174,11 +177,9 @@ def run_experiment(args):
             if args.teacher_type == "MLP":
                 teacher_model = MLP(d_input, d_hidden=64).to(device)
             elif args.teacher_type == "AgeAwareMLP1":
-                teacher_model = AgeAwareMLP1(d_input, d_hidden=64, use_consist=args.age1_use_consist, use_adversarial=args.age1_use_adversarial).to(device)
+                teacher_model = AgeAwareMLP1(d_input, d_hidden=64, use_consist=args.age1_use_consist, use_adversarial=args.age1_use_adversarial, use_cumulative_rate=args.use_cumulative_rate).to(device)
             elif args.teacher_type == "AgeAwareMLP2":
-                teacher_model = AgeAwareMLP2(d_input, d_hidden=64, use_consist=args.age2_use_consist, use_ageloss=args.age2_use_ageloss, use_disentangle=args.age2_use_disentangle).to(device)
-            elif args.teacher_type == "AgeAwareMLP3":
-                teacher_model = AgeAwareMLP3(d_input, d_hidden=64).to(device)
+                teacher_model = AgeAwareMLP2(d_input, d_hidden=64, use_consist=args.age2_use_consist, use_ageloss=args.age2_use_ageloss, use_disentangle=args.age2_use_disentangle, use_cumulative_rate=args.use_cumulative_rate).to(device)
             
             # if args.initialize_teacher_from_baseline and args.teacher_type in ["AgeAwareMLP1", "AgeAwareMLP2"]:
             #     baseline_path = "./experiments/teacher_MLP_age60_run1/teacher_run_1.pth"  # Adjust path as needed
@@ -200,7 +201,7 @@ def run_experiment(args):
             #         'lr': args.lr * 0.1
             #     })
 
-            # if args.teacher_type in ["MLP", "AgeAwareMLP1", "AgeAwareMLP2", "AgeAwareMLP3"]:
+            # if args.teacher_type in ["MLP", "AgeAwareMLP1", "AgeAwareMLP2"]:
             #     param_groups.append({
             #         'params': teacher_model.model.parameters(),
             #         'lr': args.lr
@@ -238,22 +239,17 @@ def run_experiment(args):
             if teacher_type == "MLP":
                 teacher_model = MLP(d_input, d_hidden=64).to(device)
             elif teacher_type == "AgeAwareMLP1":
-                teacher_model = AgeAwareMLP1(d_input, d_hidden=64, use_consist=args.age1_use_consist, use_adversarial=args.age1_use_adversarial).to(device)
+                teacher_model = AgeAwareMLP1(d_input, d_hidden=64, use_consist=args.age1_use_consist, use_adversarial=args.age1_use_adversarial, use_cumulative_rate=args.use_cumulative_rate).to(device)
             elif teacher_type == "AgeAwareMLP2":
-                teacher_model = AgeAwareMLP2(d_input, d_hidden=64, use_consist=args.age2_use_consist, use_ageloss=args.age2_use_ageloss, use_disentangle=args.age2_use_disentangle).to(device)
-            elif teacher_type == "AgeAwareMLP3":
-                teacher_model = AgeAwareMLP3(d_input, d_hidden=64).to(device)
+                teacher_model = AgeAwareMLP2(d_input, d_hidden=64, use_consist=args.age2_use_consist, use_ageloss=args.age2_use_ageloss, use_disentangle=args.age2_use_disentangle, use_cumulative_rate=args.use_cumulative_rate).to(device)
             teacher_model.eval()
             
             if args.student_type == "MLP":
                 student_model = MLP(d_input, d_hidden=64).to(device)
             elif args.student_type == "AgeAwareMLP1":
-                student_model = AgeAwareMLP1(d_input, d_hidden=64, use_consist=args.age1_use_consist, use_adversarial=args.age1_use_adversarial).to(device)
+                student_model = AgeAwareMLP1(d_input, d_hidden=64, use_consist=args.age1_use_consist, use_adversarial=args.age1_use_adversarial, use_cumulative_rate=args.use_cumulative_rate).to(device)
             elif args.student_type == "AgeAwareMLP2":
-                student_model = AgeAwareMLP2(d_input, d_hidden=64, use_consist=args.age2_use_consist, use_ageloss=args.age2_use_ageloss, use_disentangle=args.age2_use_disentangle).to(device)
-            elif args.student_type == "AgeAwareMLP3":
-                student_model = AgeAwareMLP3(d_input, d_hidden=64).to(device)
-
+                student_model = AgeAwareMLP2(d_input, d_hidden=64, use_consist=args.age2_use_consist, use_ageloss=args.age2_use_ageloss, use_disentangle=args.age2_use_disentangle, use_cumulative_rate=args.use_cumulative_rate).to(device)
 
             # param_groups = []
 
@@ -269,7 +265,7 @@ def run_experiment(args):
             #         'lr': args.lr * 0.1
             #     })
 
-            # if args.student_type in ["MLP", "AgeAwareMLP1", "AgeAwareMLP2", "AgeAwareMLP3"]:
+            # if args.student_type in ["MLP", "AgeAwareMLP1", "AgeAwareMLP2"]:
             #     param_groups.append({
             #         'params': student_model.model.parameters(),
             #         'lr': args.lr
@@ -284,20 +280,36 @@ def run_experiment(args):
             optimizer = torch.optim.AdamW(student_model.parameters(), lr=args.lr)
             criterion = KDLoss(temperature=args.temperature, alpha=args.alpha)
             
-            kd_trainer = KDTrainer(
-                model=student_model,
-                teacher_model=teacher_model,
-                criterion=criterion,
-                optimizer=optimizer,
-                device=device,
-                model_name=f'student_run_{run}',
-                teacher_model_path=f'experiments/{args.exp_name}/{args.data_dir.split("/")[-1]}/{args.teacher_type}/{args.data_dir.split("/")[-1]}_teacher_{args.teacher_type}_age{args.age_threshold}_T{args.temperature}_alpha{args.alpha}_es{args.n_early_stop}_eval{args.eval_interval}_lr{args.lr}_run{run}/teacher_run_{run}.pth',
-                save_dir=exp_dir,
-                eval_interval=args.eval_interval,
-                n_steps=args.n_steps,
-                n_early_stop=args.n_early_stop,
-                log_interval=args.log_interval
-            )
+            if args.teacher_model_exp_name is not None:
+                kd_trainer = KDTrainer(
+                    model=student_model,
+                    teacher_model=teacher_model,
+                    criterion=criterion,
+                    optimizer=optimizer,
+                    device=device,
+                    model_name=f'student_run_{run}',
+                    teacher_model_path=f'experiments/{args.teacher_model_exp_name}/{args.data_dir.split("/")[-1]}/{args.teacher_type}/{args.data_dir.split("/")[-1]}_teacher_{args.teacher_type}_age{args.age_threshold}_T{args.temperature}_alpha{args.alpha}_es{args.teacher_model_es}_eval{args.teacher_model_eval}_lr{args.teacher_model_lr}_run{run}/teacher_run_{run}.pth',
+                    save_dir=exp_dir,
+                    eval_interval=args.eval_interval,
+                    n_steps=args.n_steps,
+                    n_early_stop=args.n_early_stop,
+                    log_interval=args.log_interval
+                )
+            else:
+                kd_trainer = KDTrainer(
+                    model=student_model,
+                    teacher_model=teacher_model,
+                    criterion=criterion,
+                    optimizer=optimizer,
+                    device=device,
+                    model_name=f'student_run_{run}',
+                    teacher_model_path=f'experiments/{args.exp_name}/{args.data_dir.split("/")[-1]}/{args.teacher_type}/{args.data_dir.split("/")[-1]}_teacher_{args.teacher_type}_age{args.age_threshold}_T{args.temperature}_alpha{args.alpha}_es{args.n_early_stop}_eval{args.eval_interval}_lr{args.lr}_run{run}/teacher_run_{run}.pth',
+                    save_dir=exp_dir,
+                    eval_interval=args.eval_interval,
+                    n_steps=args.n_steps,
+                    n_early_stop=args.n_early_stop,
+                    log_interval=args.log_interval
+                )
             
             student_results = kd_trainer.train(train_loader, val_loader, test_loader)
             student_model.eval()

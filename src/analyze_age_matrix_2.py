@@ -177,8 +177,8 @@ def analyze_transition_matrix(model, dataloader, save_dir, exp_name, device):
     return output
 
 def main():
-    diseases = ['ad', 'ms', 'uc']
-    age_thresholds = {'ad': 65, 'ms': 65, 'uc': 65}
+    diseases = ['ad']#, 'ms', 'uc']
+    age_thresholds = {'ad': 65}#, 'ms': 65, 'uc': 65}
     ancestry = 'EUR'
     
     configs = [
