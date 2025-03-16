@@ -68,3 +68,4 @@ python scripts/train4.py --exp_name test_cumulative_rate_lr3 --mode student --te
 python scripts/train4.py --exp_name test_cumulative_rate_lr3 --mode teacher --teacher_type AgeAwareMLP2 --age_threshold 65 --data_dir ./data/ad --use_cumulative_rate --lr 0.001;
 python scripts/train4.py --exp_name test_cumulative_rate_lr3 --mode student --teacher_type AgeAwareMLP2 --student_type AgeAwareMLP2 --age_threshold 65 --data_dir ./data/ad --use_cumulative_rate --lr 0.001;
 python scripts/train4.py --exp_name test_cumulative_rate_lr3 --mode student --teacher_type AgeAwareMLP2 --student_type MLP --age_threshold 65 --data_dir ./data/ad --use_cumulative_rate --lr 0.001;
+

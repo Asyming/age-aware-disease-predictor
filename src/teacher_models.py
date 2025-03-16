@@ -45,6 +45,8 @@ class MLP(nn.Module):
         preds = self.model(x)
         return preds
 
+
+
 class AgeAwareMLP1(MLP):
     """MLP model with age-aware layer and adversarial training"""
     def __init__(self, d_input, d_hidden, use_adversarial=True, use_consist=True, use_cumulative_rate=False):

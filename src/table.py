@@ -276,35 +276,6 @@ if any(results_df['experiment_group'].str.startswith('ab_')):
         ordered=True
     )
     ablation_results = ablation_results.sort_values('group_order')
-    
-    # Create bar chart
-    sns.barplot(x='experiment_group', y='auprc_mean', hue='mode', data=ablation_results)
-    plt.title('Ablation Experiment Comparison')
-    plt.xlabel('Experiment Group')
-    plt.ylabel('Average AUPRC')
-    plt.xticks(rotation=45)
-    plt.legend(title='Mode')
-    plt.tight_layout()
-    plt.savefig('ablation_comparison.png')
-    print("\nAblation experiment comparison chart saved as 'ablation_comparison.png'")
-
-# Compare full group with other groups
-if 'full' in results_df['experiment_group'].unique():
-    plt.figure(figsize=(14, 8))
-    
-    # Filter results for full group and other main groups
-    compare_groups = ['full', 'zero', 'student_enhanced_lr3']
-    compare_results = results_df[results_df['experiment_group'].isin(compare_groups)].copy()
-    
-    # Create bar chart
-    sns.barplot(x='experiment_group', y='auprc_mean', hue='mode', data=compare_results)
-    plt.title('Main Experiment Group Comparison')
-    plt.xlabel('Experiment Group')
-    plt.ylabel('Average AUPRC')
-    plt.legend(title='Mode')
-    plt.tight_layout()
-    plt.savefig('main_comparison.png')
-    print("\nMain experiment group comparison chart saved as 'main_comparison.png'")
 
 # Summary report
 print("\n\nExperiment Results Summary Report")

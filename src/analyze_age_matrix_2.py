@@ -8,19 +8,20 @@ from torch.utils.data import DataLoader
 from src.teacher_models import AgeAwareMLP1, AgeAwareMLP2
 from src.dataset import Dataset
 from src.utils import set_random_seed, split_by_age, seed_worker, collate_fn
+from scripts.train4 import parse_args
 
-def load_model_and_data(exp_dir, model_type, data_dir, ancestry, age_threshold):
+def load_model_and_data(args):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-    info_df = pd.read_csv(f"{data_dir}/sample_info.csv")
-    info_df = info_df[info_df['ancestry'] == ancestry].reset_index(drop=True)
+    info_df = pd.read_csv(f"{args.data_dir}/sample_info.csv")
+    info_df = info_df[info_df['ancestry'] == args.ancestry].reset_index(drop=True)
     
     set_random_seed()
-    splits_list = split_by_age(info_df['label'].values, info_df['age'].values, age_threshold)
+    splits_list = split_by_age(info_df['label'].values, info_df['age'].values, args.age_threshold)
     train_indices, _, _ = splits_list[0]
     
     dataset = Dataset(
-        f"{data_dir}/X",
+        f"{args.data_dir}/X",
         info_df['sample_id'].iloc[train_indices].values,
         info_df['age'].iloc[train_indices].values,
         info_df['label'].iloc[train_indices].values,
@@ -31,7 +32,7 @@ def load_model_and_data(exp_dir, model_type, data_dir, ancestry, age_threshold):
         dataset,
         batch_size=128,
         shuffle=False,
-        num_workers=1,
+        num_workers=8,
         worker_init_fn=seed_worker,
         drop_last=False,
         collate_fn=collate_fn,
@@ -196,7 +197,7 @@ def main():
         
         for config in configs:
             if config['mode'] == 'teacher':
-                exp_pattern = f"{disease}_{config['mode']}_{config['model_type']}_age{age_threshold}_es20_run1"
+                exp_pattern = f'experiments/{args.exp_name}/{args.data_dir.split("/")[-1]}/{args.teacher_type}/{args.data_dir.split("/")[-1]}_{args.mode}_{args.teacher_type}_age{args.age_threshold}_T{args.temperature}_alpha{args.alpha}_es{args.n_early_stop}_eval{args.eval_interval}_lr{args.lr}_run{run}'
             else:
                 exp_pattern = f"{disease}_{config['mode']}_{config['model_type']}_{config['student_type']}_age{age_threshold}_es20_run1"
             
