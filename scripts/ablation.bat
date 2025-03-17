@@ -69,3 +69,25 @@ python scripts/train4.py --exp_name test_cumulative_rate_lr3 --mode teacher --te
 python scripts/train4.py --exp_name test_cumulative_rate_lr3 --mode student --teacher_type AgeAwareMLP2 --student_type AgeAwareMLP2 --age_threshold 65 --data_dir ./data/ad --use_cumulative_rate --lr 0.001;
 python scripts/train4.py --exp_name test_cumulative_rate_lr3 --mode student --teacher_type AgeAwareMLP2 --student_type MLP --age_threshold 65 --data_dir ./data/ad --use_cumulative_rate --lr 0.001;
 
+# test_classical (6) # teacher: classical, student: classical
+python scripts/train_classical.py --mode teacher --data_dir ./data/ad --model_type XGBoost --exp_name test_classical;
+python scripts/train_classical.py --mode student --data_dir ./data/ad --model_type XGBoost --teacher_type XGBoost --teacher_model_exp_name test_classical --exp_name test_classical;
+python scripts/train_classical.py --mode teacher --data_dir ./data/ad --model_type LinearRegression --exp_name test_classical;
+python scripts/train_classical.py --mode student --data_dir ./data/ad --model_type LinearRegression --teacher_type LinearRegression --teacher_model_exp_name test_classical --exp_name test_classical;
+python scripts/train_classical.py --mode teacher --data_dir ./data/ad --model_type LightGBM --exp_name test_classical;
+python scripts/train_classical.py --mode student --data_dir ./data/ad --model_type LightGBM --teacher_type LightGBM --teacher_model_exp_name test_classical --exp_name test_classical;
+
+# test_MLP_classical (3) # teacher: MLP, student: classical
+python scripts/train_classical.py --mode student --data_dir ./data/ad --model_type XGBoost --train4_teacher_exp_name full --exp_name test_MLP_classical --train4_teacher_type MLP;
+python scripts/train_classical.py --mode student --data_dir ./data/ad --model_type LinearRegression --train4_teacher_exp_name full --exp_name test_MLP_classical --train4_teacher_type MLP;
+python scripts/train_classical.py --mode student --data_dir ./data/ad --model_type LightGBM --train4_teacher_exp_name full --exp_name test_MLP_classical --train4_teacher_type MLP;
+
+# test_AgeAwareMLP1_classical (3) # teacher: AgeAwareMLP1, student: classical
+python scripts/train_classical.py --mode student --data_dir ./data/ad --model_type XGBoost --train4_teacher_exp_name full --exp_name test_AgeAwareMLP1_classical --train4_teacher_type AgeAwareMLP1;
+python scripts/train_classical.py --mode student --data_dir ./data/ad --model_type LinearRegression --train4_teacher_exp_name full --exp_name test_AgeAwareMLP1_classical --train4_teacher_type AgeAwareMLP1;
+python scripts/train_classical.py --mode student --data_dir ./data/ad --model_type LightGBM --train4_teacher_exp_name full --exp_name test_AgeAwareMLP1_classical --train4_teacher_type AgeAwareMLP1;
+
+# test_AgeAwareMLP2_classical (3) # teacher: AgeAwareMLP2, student: classical
+python scripts/train_classical.py --mode student --data_dir ./data/ad --model_type XGBoost --train4_teacher_exp_name full --exp_name test_AgeAwareMLP2_classical --train4_teacher_type AgeAwareMLP2;
+python scripts/train_classical.py --mode student --data_dir ./data/ad --model_type LinearRegression --train4_teacher_exp_name full --exp_name test_AgeAwareMLP2_classical --train4_teacher_type AgeAwareMLP2;
+python scripts/train_classical.py --mode student --data_dir ./data/ad --model_type LightGBM --train4_teacher_exp_name full --exp_name test_AgeAwareMLP2_classical --train4_teacher_type AgeAwareMLP2;
