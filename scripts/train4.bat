@@ -7,6 +7,8 @@ python src/table.py --disease ms
 python src/table.py --disease uc
 python src/table.py --disease all
 
+python src/analyze_age_matrix_2.py
+
 python scripts/train_classical.py --mode teacher --data_dir ./data/ms --model_type XGBoost --exp_name test_classical;
 python scripts/train_classical.py --mode student --data_dir ./data/ms --model_type XGBoost --teacher_type XGBoost --teacher_model_exp_name test_classical --exp_name test_classical;
 
@@ -18,12 +20,7 @@ python scripts/train_classical.py --mode student --data_dir ./data/ms --model_ty
 
 python scripts/train4.py --exp_name test --mode teacher --teacher_type MLP --age_threshold 65 --data_dir ./data/ad;python scripts/train4.py --exp_name test --mode student --teacher_type MLP --student_type MLP --age_threshold 65 --data_dir ./data/ad;python scripts/train4.py --exp_name test --mode teacher --teacher_type AgeAwareMLP1 --age_threshold 65 --data_dir ./data/ad;python scripts/train4.py --exp_name test --mode student --teacher_type AgeAwareMLP1 --student_type AgeAwareMLP1 --age_threshold 65 --data_dir ./data/ad;python scripts/train4.py --exp_name test --mode student --teacher_type AgeAwareMLP1 --student_type MLP --age_threshold 65 --data_dir ./data/ad;python scripts/train4.py --exp_name test --mode teacher --teacher_type AgeAwareMLP2 --age_threshold 65 --data_dir ./data/ad;python scripts/train4.py --exp_name test --mode student --teacher_type AgeAwareMLP2 --student_type AgeAwareMLP2 --age_threshold 65 --data_dir ./data/ad;python scripts/train4.py --exp_name test --mode student --teacher_type AgeAwareMLP2 --student_type MLP --age_threshold 65 --data_dir ./data/ad;
 
-python scripts/train4.py --exp_name test --mode teacher --teacher_type MLP --age_threshold 65 --data_dir ./data/ms;python scripts/train4.py --exp_name test --mode student --teacher_type MLP --student_type MLP --age_threshold 65 --data_dir ./data/ms;
-python scripts/train4.py --exp_name test --mode teacher --teacher_type AgeAwareMLP1 --age_threshold 65 --data_dir ./data/ms;python scripts/train4.py --exp_name test --mode student --teacher_type AgeAwareMLP1 --student_type AgeAwareMLP1 --age_threshold 65 --data_dir ./data/ms;python scripts/train4.py --exp_name test --mode student --teacher_type AgeAwareMLP1 --student_type MLP --age_threshold 65 --data_dir ./data/ms;
-python scripts/train4.py --exp_name test --mode teacher --teacher_type AgeAwareMLP2 --age_threshold 65 --data_dir ./data/ms;python scripts/train4.py --exp_name test --mode student --teacher_type AgeAwareMLP2 --student_type AgeAwareMLP2 --age_threshold 65 --data_dir ./data/ms;python scripts/train4.py --exp_name test --mode student --teacher_type AgeAwareMLP2 --student_type MLP --age_threshold 65 --data_dir ./data/ms;
-
-python scripts/train4.py --exp_name test --mode teacher --teacher_type MLP --age_threshold 65 --data_dir ./data/uc;python scripts/train4.py --exp_name test --mode student --teacher_type MLP --student_type MLP --age_threshold 65 --data_dir ./data/uc;
-python scripts/train4.py --exp_name test --mode teacher --teacher_type AgeAwareMLP1 --age_threshold 65 --data_dir ./data/uc;python scripts/train4.py --exp_name test --mode student --teacher_type AgeAwareMLP1 --student_type AgeAwareMLP1 --age_threshold 65 --data_dir ./data/uc;python scripts/train4.py --exp_name test --mode student --teacher_type AgeAwareMLP1 --student_type MLP --age_threshold 65 --data_dir ./data/uc;
-python scripts/train4.py --exp_name test --mode teacher --teacher_type AgeAwareMLP2 --age_threshold 65 --data_dir ./data/uc;python scripts/train4.py --exp_name test --mode student --teacher_type AgeAwareMLP2 --student_type AgeAwareMLP2 --age_threshold 65 --data_dir ./data/uc;python scripts/train4.py --exp_name test --mode student --teacher_type AgeAwareMLP2 --student_type MLP --age_threshold 65 --data_dir ./data/uc;python src/analyze_age_matrix_2.py
-
-
+# debug ad_new
+python scripts/train4.py --exp_name ad_new_test --mode teacher --teacher_type MLP --age_threshold 65 --data_dir ./data/ad_new;python scripts/train4.py --exp_name ad_new_test --mode student --teacher_type MLP --student_type MLP --age_threshold 65 --data_dir ./data/ad_new;
+python scripts/train4.py --exp_name ad_new_test --mode teacher --teacher_type AgeAwareMLP1 --age_threshold 65 --data_dir ./data/ad_new;python scripts/train4.py --exp_name ad_new_test --mode student --teacher_type AgeAwareMLP1 --student_type AgeAwareMLP1 --age_threshold 65 --data_dir ./data/ad_new;
+python scripts/train4.py --exp_name ad_new_test --mode teacher --teacher_type UGP_v2 --age_threshold 65 --data_dir ./data/ad_new;python scripts/train4.py --exp_name ad_new_test --mode student --teacher_type UGP_v2 --student_type UGP_v2 --age_threshold 65 --data_dir ./data/ad_new;

@@ -3,11 +3,13 @@ import sys
 sys.path.append(os.path.abspath("/data3/lihan/projects/ageaware"))
 import argparse
 import warnings
+warnings.filterwarnings("ignore")
 import numpy as np
 import pandas as pd
 from sklearn.linear_model import LinearRegression
 import xgboost as xgb
 import lightgbm as lgb
+from lightgbm import early_stopping as lgb_es
 from scipy.special import expit as sigmoid
 from sklearn.metrics import classification_report, average_precision_score
 from sklearn.preprocessing import StandardScaler, MinMaxScaler
@@ -24,10 +26,10 @@ def parse_args():
     parser.add_argument("--age_threshold", type=int, default=65)
     parser.add_argument("--data_dir", type=str, default='./data/ad', choices=['./data/ad','./data/ms','./data/uc'])
     parser.add_argument("--n_runs", type=int, default=20)
-    parser.add_argument("--model_type", type=str, default="LinearRegression", 
-                      choices=["LinearRegression", "XGBoost", "LightGBM"])
+    parser.add_argument("--model_type", type=str, default="LinearRegression", choices=["LinearRegression", "XGBoostRegressor", "LightGBMRegressor", "XGBoostClassifier", "LightGBMClassifier"])
     
     # Model-specific parameters
+    parser.add_argument("--lr", type=float, default=0.01)
     parser.add_argument("--xgb_n_estimators", type=int, default=100)
     parser.add_argument("--xgb_learning_rate", type=float, default=0.1)
     parser.add_argument("--xgb_max_depth", type=int, default=5)
@@ -35,22 +37,17 @@ def parse_args():
     parser.add_argument("--lgb_n_estimators", type=int, default=100)
     parser.add_argument("--lgb_learning_rate", type=float, default=0.1)
     parser.add_argument("--lgb_max_depth", type=int, default=5)
+    parser.add_argument("--es_rounds", type=int, default=20)
     
-    parser.add_argument("--mode", type=str, default="teacher", choices=["teacher", "student"])
-    parser.add_argument("--teacher_type", type=str, default="LinearRegression", 
-                        choices=["LinearRegression", "XGBoost", "LightGBM"])
-    parser.add_argument("--teacher_model_exp_name", type=str, default=None, 
-                        help="Teacher model experiment name for loading")
-    parser.add_argument("--alpha", type=float, default=0.1, 
-                        help="Weight for hard labels vs soft labels (higher = more weight to hard labels)")
-    parser.add_argument("--temperature", type=float, default=2, 
-                        help="Temperature for softening probability distributions")
+    parser.add_argument("--mode", type=str, required=True, choices=["teacher", "student"])
+    parser.add_argument("--teacher_type", type=str, default="LinearRegression", choices=["LinearRegression", "XGBoostRegressor", "LightGBMRegressor"])
+    parser.add_argument("--teacher_model_exp_name", type=str, default=None)
+    parser.add_argument("--alpha", type=float, default=0.1, help="higher = more weight to hard labels")
+    parser.add_argument("--temperature", type=float, default=2)
     
     # Train4 teacher model parameters
-    parser.add_argument("--train4_teacher_exp_name", type=str, default=None,
-                      help="Deep learning teacher model experiment name from train4.py")
-    parser.add_argument("--train4_teacher_type", type=str, default="MLP",
-                      choices=["MLP", "AgeAwareMLP1", "AgeAwareMLP2"])
+    parser.add_argument("--train4_teacher_exp_name", type=str, default=None)
+    parser.add_argument("--train4_teacher_type", type=str, default="MLP", choices=["MLP", "AgeAwareMLP1", "AgeAwareMLP2"])
     parser.add_argument("--train4_teacher_es", type=int, default=20)
     parser.add_argument("--train4_teacher_eval", type=int, default=50)
     parser.add_argument("--train4_teacher_lr", type=float, default=1e-4)
@@ -85,20 +82,43 @@ def get_model(args):
             n_jobs=-1
         )
     
-    elif args.model_type == "XGBoost":
+    elif args.model_type == "XGBoostRegressor":
         return xgb.XGBRegressor(
-            # n_estimators=args.xgb_n_estimators,
-            # max_depth=args.xgb_max_depth,
-            # learning_rate=args.xgb_learning_rate,
+            learning_rate=args.lr,
+            n_estimators=args.xgb_n_estimators,
+            max_depth=args.xgb_max_depth,
+            learning_rate=args.xgb_learning_rate,
             # device='cuda' # 会爆内存
+            early_stopping_rounds=args.es_rounds,
             n_jobs=-1
         )
     
-    elif args.model_type == "LightGBM":
+    elif args.model_type == "LightGBMRegressor":
         return lgb.LGBMRegressor(
-            # n_estimators=args.lgb_n_estimators,
-            # max_depth=args.lgb_max_depth,
-            # learning_rate=args.lgb_learning_rate,
+            learning_rate=args.lr,
+            objective='cross_entropy', # 不太合适
+            n_estimators=args.lgb_n_estimators,
+            max_depth=args.lgb_max_depth,
+            learning_rate=args.lgb_learning_rate,
+            device='gpu',
+            n_jobs=-1
+        )
+    
+    elif args.model_type == "XGBoostClassifier":
+        return xgb.XGBClassifier(
+            objective='binary:',
+            n_estimators=args.xgb_n_estimators,
+            max_depth=args.xgb_max_depth,
+            learning_rate=args.xgb_learning_rate,
+            n_jobs=-1
+        )   
+    
+    elif args.model_type == "LightGBMClassifier":
+        return lgb.LGBMClassifier(
+            objective='binary',
+            n_estimators=args.lgb_n_estimators,
+            max_depth=args.lgb_max_depth,
+            learning_rate=args.lgb_learning_rate,
             device='gpu',
             n_jobs=-1
         )
@@ -106,7 +126,7 @@ def get_model(args):
     else:
         raise ValueError(f"Unsupported model type: {args.model_type}")
 
-# load classical teacher model
+# classical teacher model
 def load_teacher_model(args, run, data_name):
     model_path = os.path.join(
         'experiments', 
@@ -122,7 +142,6 @@ def load_teacher_model(args, run, data_name):
     teacher_model = model_data['model']
     return teacher_model
 
-# soft_labels from classical teacher model
 def get_soft_labels(teacher_model, X, temperature=2.0):
     # preds close to 0. sigmoid directly seems to perform worse. scale to -1~1 first.
     preds = teacher_model.predict(X)
@@ -136,7 +155,7 @@ def get_soft_labels(teacher_model, X, temperature=2.0):
     print(f'max(soft_labels): {max(soft_labels)}')
     return soft_labels
 
-# load train4 teacher model
+# train4 teacher model
 def load_train4_teacher(args, run, data_name):
     """Load teacher model from train4.py (.pth file)"""
     if args.train4_teacher_exp_name is None:
@@ -174,7 +193,6 @@ def load_train4_teacher(args, run, data_name):
     
     return model, device
 
-# soft_labels from train4 teacher model
 def get_train4_soft_labels(model, device, X_train, batch_size=128, temperature=2.0):
     """Get soft labels from train4 teacher model"""
     soft_labels = []
@@ -205,13 +223,36 @@ def get_train4_soft_labels(model, device, X_train, batch_size=128, temperature=2
     
     return soft_labels
 
-def train_with_soft_labels(model, X_train, y_train, soft_labels=None, alpha=0.1, model_type="LinearRegression"):
-    if soft_labels is None or alpha == 1.0:
-        model.fit(X_train, y_train)
+def train_with_soft_labels(model, X_train, y_train, X_val=None, y_val=None, soft_labels=None, alpha=0.1, es_rounds=20, verbose=100, model_type="LinearRegression"):
+    if soft_labels is None:
+        if model_type == "XGBoostRegressor" and X_val is not None and y_val is not None:
+            model.fit(X_train, y_train, 
+                     eval_set=[(X_val, y_val)],
+                     verbose=True)
+        elif model_type == "LightGBMRegressor" and X_val is not None and y_val is not None:
+            callbacks = [lgb_es(stopping_rounds=es_rounds, verbose=True)]
+            model.fit(X_train, y_train, 
+                     eval_set=[(X_val, y_val)],
+                     eval_metric="average_precision",
+                     callbacks=callbacks)
+        else:
+            model.fit(X_train, y_train)
         return model
 
     combined_targets = alpha * y_train + (1-alpha) * soft_labels.flatten()
-    model.fit(X_train, combined_targets)
+    if model_type == "XGBoostRegressor" and X_val is not None and y_val is not None:
+        model.fit(X_train, combined_targets,
+                 eval_set=[(X_val, y_val)],
+                 verbose=True)
+    elif model_type == "LightGBMRegressor" and X_val is not None and y_val is not None:
+        callbacks = [lgb_es(stopping_rounds=es_rounds, verbose=True)]
+        model.fit(X_train, combined_targets,
+                 eval_set=[(X_val, y_val)],
+                 eval_metric="average_precision",
+                 callbacks=callbacks)
+    else:
+        model.fit(X_train, combined_targets)
+    
     return model
 
 def evaluate_model(model, X, y, name='Test set'):
@@ -263,24 +304,26 @@ def run_experiment(args):
         print(f"{'-'*40}")
         
         train_indices, val_indices, test_indices = splits_list[run-1]
-        train_indices = np.concatenate([train_indices, val_indices])
         
         X_train = all_X[train_indices]
         y_train = all_y[train_indices]
+        X_val = all_X[val_indices]
+        y_val = all_y[val_indices]
         X_test = all_X[test_indices]
         y_test = all_y[test_indices]
         
         scaler = StandardScaler()
         X_train = scaler.fit_transform(X_train)
+        X_val = scaler.transform(X_val)
         X_test = scaler.transform(X_test)
         
-        print(f"Data prepared for run {run}. Training set: {X_train.shape}, Test set: {X_test.shape}")
+        print(f"Data prepared for run {run}. Training set: {X_train.shape}, Validation set: {X_val.shape}, Test set: {X_test.shape}")
         
         teacher_model = None
         soft_labels = None
         train4_model_info = None
 
-        # train4 teacher model
+        # train4 soft_labels
         if args.mode == "student" and args.train4_teacher_exp_name is not None:
             train4_model_info = load_train4_teacher(args, run, data_name)
             if train4_model_info is not None:
@@ -291,7 +334,7 @@ def run_experiment(args):
                     X_train, 
                     temperature=args.temperature
                 )
-        # classical teacher model
+        # classical soft_labels
         elif args.mode == "student" and args.teacher_model_exp_name is not None:
             teacher_model = load_teacher_model(args, run, data_name)
             if teacher_model is not None:
@@ -304,23 +347,23 @@ def run_experiment(args):
         print(f"\nTraining {args.model_type} model...")
         
         model = get_model(args)
-        if args.mode == "teacher":
-            model.fit(X_train, y_train)
-        else:
-            model = train_with_soft_labels(
-                model, 
-                X_train, 
-                y_train, 
-                soft_labels=soft_labels, 
-                alpha=args.alpha,
-                model_type=args.model_type
-            )
+        model = train_with_soft_labels(
+            model, 
+            X_train, 
+            y_train,
+            X_val=X_val,
+            y_val=y_val,
+            soft_labels=soft_labels if args.mode == "student" else None,
+            alpha=args.alpha,
+            es_rounds=args.es_rounds,
+            model_type=args.model_type
+        )
 
         test_metrics = evaluate_model(model, X_test, y_test, name='Test set')
         
+        # save model
         run_dir = os.path.join(f'{exp_dir}/run_{run}')
         os.makedirs(run_dir, exist_ok=True)
-        
         joblib.dump({
             'model': model,
             'scaler': scaler,
@@ -346,7 +389,6 @@ def run_experiment(args):
     return summary
 
 if __name__ == '__main__':
-    warnings.filterwarnings("ignore")
     args = parse_args()
     set_random_seed()
     run_experiment(args)

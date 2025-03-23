@@ -4,3 +4,5 @@ data/
 *.pth
 plots/
 experiments/
+*.ipynb
+plots/
