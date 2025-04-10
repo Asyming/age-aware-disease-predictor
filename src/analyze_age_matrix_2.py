@@ -5,7 +5,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import json
 from torch.utils.data import DataLoader
-from src.teacher_models import AgeAwareMLP1, AgeAwareMLP2
+from src.teacher_models import AgeAwareMLP1, AgeAwareMLP2, AgeUGP_v1, AgeUGP_v2
 from src.dataset import Dataset
 from src.utils import set_random_seed, split_by_age, seed_worker, collate_fn
 from scripts.train4 import parse_args

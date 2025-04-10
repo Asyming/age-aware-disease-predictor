@@ -2,11 +2,14 @@ import os
 import torch
 import numpy as np
 from torchmetrics import AUROC, AveragePrecision
-from src.teacher_models import MLP, AgeAwareMLP1, AgeAwareMLP2, UGP_v1, UGP_v2
+from src.teacher_models import MLP, AgeAwareMLP1, AgeAwareMLP2, UGP_v1, UGP_v2, AgeUGP_v1, AgeUGP_v2, UGP_v3
 from src.utils import GradientQueue, gradient_clipping
 
+# Trainer_g for pure UGP models
+# Trainer for other models
+# KDTrainer for all models
 class Trainer:
-    def __init__(self, model, criterion, optimizer, device, model_name, save_dir, norm_weight=1.0, eval_interval=10, n_steps=20000, n_early_stop=10, log_interval=20):
+    def __init__(self, model, criterion, optimizer, device, model_name, save_dir, snp_ids=None, batched_g=None, norm_weight=1.0, eval_interval=10, n_steps=20000, n_early_stop=10, log_interval=20):
         self.model = model.to(device)
         self.criterion = criterion
         self.optimizer = optimizer
@@ -15,6 +18,8 @@ class Trainer:
         self.save_dir = save_dir
         os.makedirs(self.save_dir, exist_ok=True)
         self.norm_weight = norm_weight
+        self.snp_ids = torch.tensor(snp_ids)
+        self.batched_g = batched_g  
         self.auroc = AUROC(task='binary').to(device)
         self.ap = AveragePrecision(task='binary').to(device)
         self.eval_interval = eval_interval
@@ -38,6 +43,9 @@ class Trainer:
             self.optimizer.zero_grad()
             if isinstance(self.model, (AgeAwareMLP1, AgeAwareMLP2)):
                 outputs, _, norm_loss = self.model(inputs, ages, labels)
+                loss = self.criterion(outputs, labels) + self.norm_weight * norm_loss
+            elif isinstance(self.model, (AgeUGP_v1, AgeUGP_v2)):
+                outputs, _, norm_loss = self.model(inputs, self.snp_ids, self.batched_g, ages, labels)
                 loss = self.criterion(outputs, labels) + self.norm_weight * norm_loss
             else: # MLP
                 outputs = self.model(inputs)
@@ -97,36 +105,30 @@ class Trainer:
         return checkpoint
 
     def evaluate(self, data_loader):
-        # TODO: use torchmetrics
         with torch.no_grad():
             self.model.eval()
             all_logits, all_labels = [], [] 
             for inputs, labels, _ in data_loader:
                 inputs = inputs.to(self.device)
                 labels = labels.to(self.device).reshape(-1).to(torch.long)
-                logits = self.model(inputs)
-                # all_logits.extend(logits.cpu().numpy())
-                # all_labels.extend(labels.cpu().numpy())
+                if isinstance(self.model, (MLP, AgeAwareMLP1, AgeAwareMLP2)):
+                    logits = self.model(inputs)
+                elif isinstance(self.model, (AgeUGP_v1, AgeUGP_v2)):
+                    logits = self.model(inputs, self.snp_ids, self.batched_g)
+
                 all_logits.append(logits.detach())
                 all_labels.append(labels.detach())
             logits = torch.cat(all_logits).reshape(-1)
             labels = torch.cat(all_labels).reshape(-1)
-        # all_logits = np.array(all_logits)
-        # all_labels = np.array(all_labels)
-        # all_probs = 1 / (1 + np.exp(-all_logits)) # sigmoid
         return {
             'auroc': self.auroc(logits, labels).item(),
             'auprc': self.ap(logits, labels).item(),
             'predictions': logits,
             'labels': labels
-            # 'auroc': auroc(outputs, labels),
-            # 'auprc': auprc(outputs, labels),
-            # 'predictions': outputs,
-            # 'labels': labels
         }
 
 class Trainer_g:
-    def __init__(self, model, criterion, optimizer, device, model_name, save_dir, snp_ids, batched_g, norm_weight=1.0, eval_interval=10, n_steps=20000, n_early_stop=10, log_interval=20):
+    def __init__(self, model, criterion, optimizer, device, model_name, save_dir, snp_ids, batched_g, gene_g=None, norm_weight=1.0, eval_interval=10, n_steps=20000, n_early_stop=10, log_interval=20):
         self.model = model.to(device)
         self.criterion = criterion
         self.optimizer = optimizer
@@ -135,7 +137,8 @@ class Trainer_g:
         self.save_dir = save_dir
         os.makedirs(self.save_dir, exist_ok=True)
         self.snp_ids = torch.tensor(snp_ids)
-        self.batched_g = batched_g     
+        self.batched_g = batched_g
+        self.gene_g = gene_g
         self.auroc = AUROC(task='binary').to(device)
         self.ap = AveragePrecision(task='binary').to(device)
         self.eval_interval = eval_interval
@@ -180,13 +183,25 @@ class Trainer_g:
                 running_loss1.append(loss1.item())
                 running_loss2.append(loss2.item())
                 running_loss3.append(loss3.item())
+            elif isinstance(self.model, UGP_v3):
+                preds, weights, attention_weights = self.model(inputs, self.snp_ids, self.batched_g, self.gene_g)
+                loss = self.criterion(preds, labels)
+                loss.backward()
+                gradient_clipping(self.model, self.gradnorm_queue)
+                self.optimizer.step()
+                running_loss.append(loss.item())
+            
             if (step + 1) % self.log_interval == 0:
                 if isinstance(self.model, UGP_v1):
+                    print(f"[{step + 1}] loss: {np.mean(running_loss):.3f}", flush=True)
+                    running_loss = []
+                elif isinstance(self.model, UGP_v3):
                     print(f"[{step + 1}] loss: {np.mean(running_loss):.3f}", flush=True)
                     running_loss = []
                 else:
                     print(f"[{step + 1}] loss: {np.mean(running_loss):.3f}, loss1: {np.mean(running_loss1):.3f}, loss2: {np.mean(running_loss2):.3f}, loss3: {np.mean(running_loss3):.3f}, weight: {torch.mean(torch.abs(weights)).item()}", flush=True)
                     running_loss, running_loss1, running_loss2, running_loss3 = [], [], [], []
+            
             if (step + 1) % self.eval_interval == 0:
                 print("----------------Validating----------------", flush=True)
                 val_metrics = self.evaluate(val_loader)
@@ -239,6 +254,8 @@ class Trainer_g:
                 elif isinstance(self.model, UGP_v2):
                     linear_preds, nonlinear_preds, _ = self.model(inputs, self.snp_ids, self.batched_g)
                     logits = linear_preds + nonlinear_preds
+                elif isinstance(self.model, UGP_v3):
+                    logits, _, _ = self.model(inputs, self.snp_ids, self.batched_g, self.gene_g)
                 all_logits.append(logits.detach())
                 all_labels.append(labels.detach())
             logits = torch.cat(all_logits).reshape(-1)
@@ -252,7 +269,7 @@ class Trainer_g:
 
 class KDTrainer:
     def __init__(self, model, teacher_model, criterion, optimizer, device, model_name, teacher_model_path, save_dir, 
-                 snp_ids=None, batched_g=None, norm_weight=1.0, eval_interval=10, n_steps=20000, n_early_stop=10, log_interval=20):
+                 snp_ids=None, batched_g=None, gene_g=None, norm_weight=1.0, eval_interval=10, n_steps=20000, n_early_stop=10, log_interval=20):
         self.model = model.to(device)
         self.criterion = criterion
         self.optimizer = optimizer
@@ -261,6 +278,9 @@ class KDTrainer:
         self.save_dir = save_dir
         os.makedirs(self.save_dir, exist_ok=True)
         self.norm_weight = norm_weight
+        self.snp_ids = snp_ids
+        self.batched_g = batched_g
+        self.gene_g = gene_g
         self.auroc = AUROC(task='binary').to(device)
         self.ap = AveragePrecision(task='binary').to(device)
         self.eval_interval = eval_interval
@@ -275,8 +295,6 @@ class KDTrainer:
         teacher_model.load_state_dict(teacher_ckpt['model_state_dict'])
         self.teacher_model = teacher_model.to(device)
         self.teacher_model.eval()
-        self.snp_ids = snp_ids
-        self.batched_g = batched_g
 
     def train(self, train_loader, val_loader, test_loader, es_window=3, train_eval_loader=None):
         print(f"\n{'-'*20} Training Student model with best Teacher {'-'*20}")
@@ -299,8 +317,12 @@ class KDTrainer:
                 elif isinstance(self.teacher_model, UGP_v2):
                     linear_preds, nonlinear_preds, _ = self.teacher_model(inputs, self.snp_ids, self.batched_g)
                     teacher_logits = linear_preds + nonlinear_preds
+                elif isinstance(self.teacher_model, UGP_v3):
+                    teacher_logits, _, _ = self.teacher_model(inputs, self.snp_ids, self.batched_g, self.gene_g)
                 elif isinstance(self.teacher_model, (AgeAwareMLP1, AgeAwareMLP2)):
                     teacher_logits, _, _ = self.teacher_model(inputs, ages, labels)
+                elif isinstance(self.teacher_model, (AgeUGP_v1, AgeUGP_v2)):
+                    teacher_logits, _, _ = self.teacher_model(inputs, self.snp_ids, self.batched_g, ages, labels)
                 else: # MLP
                     teacher_logits = self.teacher_model(inputs)
             # student
@@ -332,6 +354,20 @@ class KDTrainer:
                 gradient_clipping(self.model, self.gradnorm_queue)
                 self.optimizer.step()
                 running_loss.append(loss.item())
+            elif isinstance(self.model, (AgeUGP_v1, AgeUGP_v2)):
+                student_logits, _, norm_loss = self.model(inputs, self.snp_ids, self.batched_g, ages, labels)
+                loss = self.criterion(student_logits, labels, teacher_logits) + self.norm_weight * norm_loss
+                loss.backward()
+                gradient_clipping(self.model, self.gradnorm_queue)
+                self.optimizer.step()
+                running_loss.append(loss.item())
+            elif isinstance(self.model, UGP_v3):
+                preds, weights, attention_weights = self.model(inputs, self.snp_ids, self.batched_g, self.gene_g)
+                loss = self.criterion(preds, labels, teacher_logits)
+                loss.backward()
+                gradient_clipping(self.model, self.gradnorm_queue)
+                self.optimizer.step()
+                running_loss.append(loss.item())
             else: # MLP
                 student_logits = self.model(inputs)
                 loss = self.criterion(student_logits, labels, teacher_logits)
@@ -344,6 +380,9 @@ class KDTrainer:
                 if isinstance(self.model, UGP_v2):
                     print(f"[{step + 1}] loss: {np.mean(running_loss):.3f}, loss1: {np.mean(running_loss1):.3f}, loss2: {np.mean(running_loss2):.3f}, loss3: {np.mean(running_loss3):.3f}, weight: {torch.mean(torch.abs(weights)).item()}", flush=True)
                     running_loss, running_loss1, running_loss2, running_loss3 = [], [], [], []
+                elif isinstance(self.model, UGP_v3):
+                    print(f"[{step + 1}] loss: {np.mean(running_loss):.3f}", flush=True)
+                    running_loss = []
                 else:
                     print(f"[{step + 1}] loss: {np.mean(running_loss):.3f}", flush=True)
                     running_loss = []
@@ -395,23 +434,21 @@ class KDTrainer:
             self.model.eval()
             all_logits, all_labels = [], []
             for batch in data_loader:
-                if isinstance(self.model, (MLP, UGP_v1, UGP_v2)) or isinstance(self.teacher_model, (MLP, UGP_v1, UGP_v2)):
-                    inputs, labels, _ = batch
-                    inputs = inputs.to(self.device)
-                    labels = labels.to(self.device).reshape(-1).to(torch.long)
-                    if isinstance(self.model, UGP_v1):
-                        logits, _ = self.model(inputs, self.snp_ids, self.batched_g)
-                    elif isinstance(self.model, UGP_v2):
-                        linear_preds, nonlinear_preds, _ = self.model(inputs, self.snp_ids, self.batched_g)
-                        logits = linear_preds + nonlinear_preds
-                    elif isinstance(self.model, MLP):
-                        logits = self.model(inputs)
-                elif isinstance(self.model, (AgeAwareMLP1, AgeAwareMLP2)):
-                    inputs, labels, ages = batch
-                    inputs = inputs.to(self.device)
-                    labels = labels.to(self.device).reshape(-1).to(torch.long)
-                    ages = ages.to(self.device)
-                    logits = self.model(inputs, ages, labels)
+                inputs, labels, _ = batch
+                inputs = inputs.to(self.device)
+                labels = labels.to(self.device).reshape(-1).to(torch.long)
+                if isinstance(self.model, UGP_v1):
+                    logits, _ = self.model(inputs, self.snp_ids, self.batched_g)
+                elif isinstance(self.model, UGP_v2):
+                    linear_preds, nonlinear_preds, _ = self.model(inputs, self.snp_ids, self.batched_g)
+                    logits = linear_preds + nonlinear_preds
+                elif isinstance(self.model, UGP_v3):
+                    logits, _, _ = self.model(inputs, self.snp_ids, self.batched_g, self.gene_g)
+                elif isinstance(self.model, (MLP, AgeAwareMLP1, AgeAwareMLP2)):
+                    logits = self.model(inputs)
+                elif isinstance(self.model, (AgeUGP_v1, AgeUGP_v2)):
+                    logits = self.model(inputs, self.snp_ids, self.batched_g)
+
                 all_logits.append(logits.detach())
                 all_labels.append(labels.detach())
             logits = torch.cat(all_logits).reshape(-1)

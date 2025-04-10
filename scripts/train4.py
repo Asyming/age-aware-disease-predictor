@@ -12,7 +12,7 @@ import numpy as np
 import dgl
 import pickle
 import json
-from src.teacher_models import MLP, AgeAwareMLP1, AgeAwareMLP2, UGP_v1, UGP_v2
+from src.teacher_models import MLP, AgeAwareMLP1, AgeAwareMLP2, UGP_v1, UGP_v2, AgeUGP_v1, AgeUGP_v2, UGP_v3
 from src.dataset import Dataset
 from src.loss import KDLoss
 from src.trainer import Trainer, Trainer_g, KDTrainer
@@ -26,16 +26,20 @@ def parse_args():
     parser.add_argument("--ancestry", type=str, default='EUR')
     parser.add_argument("--age_threshold", type=int, default=65)
     parser.add_argument("--data_dir", type=str, default='./data/ad', choices=['./data/ad','./data/ms','./data/uc','./data/ad_new'])
-    parser.add_argument("--age_range", type=str, default='40-70', help='min-max')
+    parser.add_argument("--age_range", type=str, default='40-70', help='age range: min-max')
     parser.add_argument("--mode", type=str, choices=["teacher", "student"], required=True)
-    parser.add_argument("--teacher_type", type=str, default="MLP", choices=["MLP", "AgeAwareMLP1", "AgeAwareMLP2", "UGP_v1", "UGP_v2"])
-    parser.add_argument("--student_type", type=str, default=None, choices=["MLP", "AgeAwareMLP1", "AgeAwareMLP2", "UGP_v1", "UGP_v2"])
+    parser.add_argument("--teacher_type", type=str, default="MLP", choices=["MLP", "AgeAwareMLP1", "AgeAwareMLP2", "UGP_v1", "UGP_v2", "UGP_v3", "AgeUGP_v1", "AgeUGP_v2"])
+    parser.add_argument("--student_type", type=str, default=None, choices=["MLP", "AgeAwareMLP1", "AgeAwareMLP2", "UGP_v1", "UGP_v2", "UGP_v3", "AgeUGP_v1", "AgeUGP_v2"])
     # model settings
     parser.add_argument("--num_workers", type=int, default=8)
+    ## Teacher gnn models: lr = 1e-5 performs better
+    ## Teacher other models: lr = 1e-4 performs better
+    ## Student models: lr = teacher_model_lr * 10 performs better
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--n_runs", type=int, default=20)
     parser.add_argument("--batch_size", type=int, default=128)
     parser.add_argument("--d_hidden", type=int, default=64)
+    parser.add_argument("--n_gnn_layers", type=int, default=1)
     parser.add_argument("--eval_interval", type=int, default=50)
     parser.add_argument("--log_interval", type=int, default=50)
     parser.add_argument("--n_early_stop", type=int, default=20)
@@ -45,8 +49,8 @@ def parse_args():
     parser.add_argument("--teacher_model_lr", type=float, default=1e-4)
     parser.add_argument("--teacher_model_es", type=int, default=20)
     parser.add_argument("--teacher_model_eval", type=int, default=50)
-    parser.add_argument("--snp_dropout", type=float, default=0.99)
-    parser.add_argument("--gene_dropout", type=float, default=0.5)
+    parser.add_argument("--snp_dropout", type=float, default=0.5)
+    parser.add_argument("--gene_dropout", type=float, default=0.0)
     # ablation study
     parser.add_argument("--age1_use_consist", type=lambda x: x.lower() == 'true', default=True)
     parser.add_argument("--age1_use_adversarial", type=lambda x: x.lower() == 'true', default=True)
@@ -63,8 +67,8 @@ def run_experiment(args):
     info_df = pd.read_csv(f"{args.data_dir}/sample_info.csv")
     info_df = info_df[(info_df['ancestry'] == args.ancestry) & (info_df['age'] >= int(args.age_range.split('-')[0])) & (info_df['age'] <= int(args.age_range.split('-')[1]))].reset_index(drop=True)
     splits_list = split_by_age(info_df['label'].values, info_df['age'].values, args.age_threshold, n_splits=args.n_runs)
-    snp_ids, batched_g = None, None
-    if args.teacher_type in ["UGP_v1", "UGP_v2"] or args.student_type in ["UGP_v1", "UGP_v2"]:
+    snp_ids, batched_g, gene_g = None, None, None
+    if args.teacher_type in ["UGP_v1", "UGP_v2", "AgeUGP_v1", "AgeUGP_v2", "UGP_v3"] or args.student_type in ["UGP_v1", "UGP_v2", "AgeUGP_v1", "AgeUGP_v2", "UGP_v3"]:
         with open(f"{args.data_dir}/gene2snps.pkl", "rb") as f:
             gene2snps = pickle.load(f)
         n_genes = len(gene2snps.keys())
@@ -74,9 +78,12 @@ def run_experiment(args):
         n_snps = len(np.unique(snp_ids))
         print('n_genes:', n_genes, 'n_snps:', n_snps, 'n_nodes:', len(snp_ids))
         graph_list = []
-        for snps in gene2snps.values():
+        for snps in gene2snps.values(): # snps: list of snp ids for each gene.
             graph_list.append(dgl.graph(data=[], num_nodes=len(snps)))
         batched_g = dgl.batch(graph_list)
+        
+        if args.teacher_type == "UGP_v3" or args.student_type == "UGP_v3":
+            gene_g = dgl.load_graphs(f"{args.data_dir}/ggi_subgraph.bin")[0][0].to(device)
     all_results = {
         'teacher': {'auroc': [], 'auprc': []},
         'student': {'auroc': [], 'auprc': []}
@@ -125,6 +132,12 @@ def run_experiment(args):
                 teacher_model = UGP_v1(n_snps=n_snps, n_genes=n_genes, snp_dropout=args.snp_dropout, gene_dropout=args.gene_dropout).to(device)
             elif args.teacher_type == "UGP_v2":
                 teacher_model = UGP_v2(n_snps=n_snps, n_genes=n_genes, snp_dropout=args.snp_dropout, gene_dropout=args.gene_dropout).to(device)
+            elif args.teacher_type == "UGP_v3":
+                teacher_model = UGP_v3(n_snps=n_snps, n_genes=n_genes, snp_dropout=args.snp_dropout, gene_dropout=args.gene_dropout, n_gnn_layers=args.n_gnn_layers).to(device)
+            elif args.teacher_type == "AgeUGP_v1":
+                teacher_model = AgeUGP_v1(n_snps=n_snps, n_genes=n_genes, snp_dropout=args.snp_dropout, gene_dropout=args.gene_dropout).to(device)
+            elif args.teacher_type == "AgeUGP_v2":
+                teacher_model = AgeUGP_v2(n_snps=n_snps, n_genes=n_genes, snp_dropout=args.snp_dropout, gene_dropout=args.gene_dropout).to(device)
 
             if args.use_adptive_lr:
                 param_groups = []
@@ -152,8 +165,27 @@ def run_experiment(args):
             else: 
                 optimizer = torch.optim.AdamW(teacher_model.parameters(), lr=args.lr)
             criterion = nn.BCEWithLogitsLoss()
-            if args.teacher_type in ["UGP_v1", "UGP_v2"]:
+
+            if args.teacher_type in ["UGP_v1", "UGP_v2", "UGP_v3"]:
                 trainer = Trainer_g(
+                    model=teacher_model,
+                    criterion=criterion,
+                    optimizer=optimizer,
+                    device=device,
+                    model_name=f'teacher_run_{run}',
+                    save_dir=exp_dir,
+                    snp_ids=torch.LongTensor(snp_ids).to(device),
+                    batched_g=batched_g.to(device),
+                    gene_g=gene_g,
+                    eval_interval=args.eval_interval,
+                    n_steps=args.n_steps,
+                    n_early_stop=args.n_early_stop,
+                    log_interval=args.log_interval
+                )
+                teacher_results = trainer.train(train_loader, val_loader, test_loader)
+                all_results['teacher']['auprc'].append(teacher_results['test_metrics']['auprc'])
+            elif args.teacher_type in ["AgeUGP_v1", "AgeUGP_v2"]:
+                trainer = Trainer(
                     model=teacher_model,
                     criterion=criterion,
                     optimizer=optimizer,
@@ -196,6 +228,12 @@ def run_experiment(args):
                 teacher_model = UGP_v1(n_snps=n_snps, n_genes=n_genes, snp_dropout=args.snp_dropout, gene_dropout=args.gene_dropout).to(device)
             elif args.teacher_type == "UGP_v2":
                 teacher_model = UGP_v2(n_snps=n_snps, n_genes=n_genes, snp_dropout=args.snp_dropout, gene_dropout=args.gene_dropout).to(device)
+            elif args.teacher_type == "UGP_v3":
+                teacher_model = UGP_v3(n_snps=n_snps, n_genes=n_genes, snp_dropout=args.snp_dropout, gene_dropout=args.gene_dropout, n_gnn_layers=args.n_gnn_layers).to(device)
+            elif args.teacher_type == "AgeUGP_v1":
+                teacher_model = AgeUGP_v1(n_snps=n_snps, n_genes=n_genes, snp_dropout=args.snp_dropout, gene_dropout=args.gene_dropout).to(device)
+            elif args.teacher_type == "AgeUGP_v2":
+                teacher_model = AgeUGP_v2(n_snps=n_snps, n_genes=n_genes, snp_dropout=args.snp_dropout, gene_dropout=args.gene_dropout).to(device)
 
             if args.student_type == "MLP":
                 student_model = MLP(d_input, d_hidden=args.d_hidden).to(device)
@@ -207,6 +245,12 @@ def run_experiment(args):
                 student_model = UGP_v1(n_snps=n_snps, n_genes=n_genes, snp_dropout=args.snp_dropout, gene_dropout=args.gene_dropout).to(device)
             elif args.student_type == "UGP_v2":
                 student_model = UGP_v2(n_snps=n_snps, n_genes=n_genes, snp_dropout=args.snp_dropout, gene_dropout=args.gene_dropout).to(device)
+            elif args.student_type == "UGP_v3":
+                student_model = UGP_v3(n_snps=n_snps, n_genes=n_genes, snp_dropout=args.snp_dropout, gene_dropout=args.gene_dropout, n_gnn_layers=args.n_gnn_layers).to(device)
+            elif args.student_type == "AgeUGP_v1":
+                student_model = AgeUGP_v1(n_snps=n_snps, n_genes=n_genes, snp_dropout=args.snp_dropout, gene_dropout=args.gene_dropout).to(device)
+            elif args.student_type == "AgeUGP_v2":
+                student_model = AgeUGP_v2(n_snps=n_snps, n_genes=n_genes, snp_dropout=args.snp_dropout, gene_dropout=args.gene_dropout).to(device)
 
             if args.use_adptive_lr:
                 param_groups = []
@@ -234,6 +278,7 @@ def run_experiment(args):
             else:
                 optimizer = torch.optim.AdamW(student_model.parameters(), lr=args.lr)
             criterion = KDLoss(temperature=args.temperature, alpha=args.alpha)
+
             kd_trainer = KDTrainer(
                 model=student_model,
                 teacher_model=teacher_model,
@@ -245,6 +290,7 @@ def run_experiment(args):
                 save_dir=exp_dir,
                 snp_ids=torch.LongTensor(snp_ids).to(device) if snp_ids else None,
                 batched_g=batched_g.to(device) if batched_g else None,
+                gene_g=gene_g if args.student_type == "UGP_v3" or args.teacher_type == "UGP_v3" else None,
                 eval_interval=args.eval_interval,
                 n_steps=args.n_steps,
                 n_early_stop=args.n_early_stop,
@@ -261,7 +307,7 @@ def run_experiment(args):
     }
     with open(f'{exp_dir}/summary.json', 'w') as f:
         json.dump(summary, f, indent=4)
-    print("\nTraining completed. Summary saved.")
+    print(f"\nTraining {exp_dir.split('/')[-1]} completed. Summary saved.")
     return summary
 
 if __name__ == '__main__':
