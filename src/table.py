@@ -1,294 +1,145 @@
-import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
-import seaborn as sns
-import glob
-import json
 import os
+import json
+import csv
+from pathlib import Path
 import re
-import argparse
 
-# Add command line argument parsing
-parser = argparse.ArgumentParser(description='Generate experiment result tables for specific diseases')
-parser.add_argument('--disease', type=str, choices=['ad', 'ms', 'uc', 'all'], default='all', 
-                    help='Disease to analyze (ad, ms, uc, or all)')
-args = parser.parse_args()
+def extract_summary_data(root_dir, output_csv, disease_name=None):
+    results_data = []
+    root_path = Path(root_dir)
 
-# Define function to collect all experiment results
-def collect_experiment_results(base_dir='experiments'):
-    results = []
-    
-    # Recursively find all summary.json files
-    for summary_file in glob.glob(f'{base_dir}/**/summary.json', recursive=True):
-        exp_path = os.path.dirname(summary_file)
-        
-        # Parse experiment information from path
-        path_parts = exp_path.split('/')
-        exp_name = path_parts[1]  # Experiment group name
-        disease = path_parts[2]   # Disease type
-        model_type = path_parts[3]  # Model type (teacher's model type)
-        
-        # Extract configuration information (from filename)
-        config_info = path_parts[-1]
-        
-        # Distinguish between teacher and different types of student
-        if 'teacher_' in config_info or '_teacher_' in config_info:
-            mode = 'teacher'
-            student_type = None
-        else:
-            # For student paths like: ad_student_AgeAwareMLP2_AgeAwareMLP2_age65...
-            match = re.search(r'student_([^_]+)_([^_]+)_age', config_info)
-            if match:
-                teacher_model = match.group(1)
-                student_model = match.group(2)
-                
-                # Handle the special case for student_enhanced_lr3
-                if exp_name == 'student_enhanced_lr3':
-                    if student_model == 'MLP':
-                        mode = 'student2'
-                    elif 'AgeAwareMLP1' in student_model or 'AgeAwareMLP2' in student_model:
-                        if student_model == teacher_model:
-                            mode = 'student1'
-                        else:
-                            # For this experiment, if models don't match but both are age-aware
-                            # we consider it student2
-                            mode = 'student2'
+    print(f"开始在 {root_path} 中搜索 summary.json 文件...")
+
+    for json_path in root_path.rglob('summary.json'):
+        try:
+            print(f"  找到: {json_path}")
+            experiment_dir_name = json_path.parent.name
+            model_dir_name = json_path.parent.parent.name
+
+            run_type = "unknown"
+            if "teacher" in experiment_dir_name:
+                run_type = "teacher"
+            elif "student" in experiment_dir_name:
+                run_type = "student"
+
+            # 从 experiment_dir_name 提取学习率信息
+            lr_match = re.search(r'lr([\d.eE+-]+)', experiment_dir_name)
+            learning_rate = lr_match.group(1) if lr_match else "unknown" # 提取 lr 后面的部分
+
+            with open(json_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+
+            test_auprc_str = None
+            if run_type in data and 'test_auprc' in data[run_type]:
+                 test_auprc_str = data[run_type]['test_auprc']
+
+            if test_auprc_str is not None:
+                try:
+                    parts = test_auprc_str.split(' ± ')
+                    if len(parts) == 2:
+                        auprc_mean_str = parts[0]
+                        auprc_std_str = parts[1]
+                        auprc_mean = float(auprc_mean_str)
+                        auprc_std = float(auprc_std_str)
+
+                        # 将数据添加到结果列表，experiment 列只包含学习率，添加疾病信息
+                        results_data.append({
+                            'disease': disease_name,  # 添加疾病名称
+                            'model_name': model_dir_name,
+                            'run_type': run_type,
+                            'experiment': learning_rate, # 使用提取的学习率
+                            'test_auprc_mean': f"{auprc_mean:.4f}",
+                            'test_auprc_std': f"{auprc_std:.4f}"
+                        })
                     else:
-                        mode = 'student2'  # Default
-                else:
-                    # If student model matches teacher model, it's student1
-                    if student_model == teacher_model:
-                        mode = 'student1'
-                    # If student model is MLP while teacher is AgeAwareMLP, it's student2
-                    elif student_model == 'MLP' or (('AgeAwareMLP' in teacher_model) and not ('AgeAwareMLP' in student_model)):
-                        mode = 'student2'
-                    else:
-                        mode = 'student1'  # Default to student1 if can't determine
-                
-                student_type = student_model
+                        print(f"    警告: 字符串 '{test_auprc_str}' 格式不符合 'mean ± std'。")
+
+                except (ValueError, IndexError) as parse_error:
+                     print(f"    警告: 无法从字符串 '{test_auprc_str}' 解析 AUPRC 均值或标准差: {parse_error}")
             else:
-                # If pattern doesn't match, try to make a reasonable guess
-                if 'student_' in config_info:
-                    if 'MLP_' in config_info and 'AgeAwareMLP' in model_type:
-                        mode = 'student2'
-                    elif model_type in config_info:
-                        mode = 'student1'
-                    else:
-                        mode = 'student2'  # Default
-                else:
-                    mode = 'student2'  # Default
-                student_type = 'unknown'
+                print(f"    警告: 在 {json_path} 中未找到预期的 'test_auprc' 数据或 '{run_type}' 键。")
+
+        except json.JSONDecodeError:
+            print(f"    错误: 无法解析 JSON 文件 {json_path}")
+        except FileNotFoundError:
+            print(f"    错误: 文件未找到 {json_path}")
+        except Exception as e:
+            print(f"    处理文件 {json_path} 时发生未知错误: {e}")
+
+    return results_data
+
+def process_experiment(experiment_path, disease_list):
+    """处理指定实验路径下的所有疾病数据"""
+    all_results = []
+    experiment_path = Path(experiment_path)
+    experiment_name = experiment_path.name  # 提取实验名称
+    
+    print(f"处理实验: {experiment_name}")
+    
+    for d in disease_list:
+        search_root = experiment_path / d
+        print(f"处理疾病: {d}, 路径: {search_root}")
         
-        # Read results
-        with open(summary_file, 'r') as f:
-            summary = json.load(f)
-        
-        # Determine which key to extract based on mode
-        result_key = 'teacher' if mode == 'teacher' else 'student'
-        
-        # Record experiment information
-        if result_key in summary:
-            results.append({
-                'experiment_group': exp_name,
-                'disease': disease,
-                'model_type': model_type,
-                'student_type': student_type,
-                'mode': mode,
-                'auprc_mean': summary[result_key].get('auprc_mean', None),
-                'auprc_std': summary[result_key].get('auprc_std', None),
-                'path': exp_path,
-                'config_info': config_info  # Save for debugging
-            })
+        # 收集每个疾病的数据
+        disease_results = extract_summary_data(search_root, None, disease_name=d)
+        all_results.extend(disease_results)
     
-    return pd.DataFrame(results)
+    # 将所有结果写入单个CSV文件
+    output_file = f'{experiment_name}_summary_results.csv'
+    print(f"\n正在将提取的数据写入 {output_file}...")
+    
+    if not all_results:
+        print("未找到任何有效的 summary.json 文件或数据。")
+        return
+    
+    # 更新CSV文件头以包含disease字段
+    fieldnames = ['disease', 'model_name', 'run_type', 'experiment', 'test_auprc_mean', 'test_auprc_std']
+    try:
+        with open(output_file, 'w', newline='', encoding='utf-8') as csvfile:
+            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(all_results)
+        print(f"CSV 文件 {output_file} 写入成功！")
+    except IOError as e:
+        print(f"写入 CSV 文件时出错: {e}")
+    except Exception as e:
+        print(f"写入 CSV 时发生未知错误: {e}")
 
-# Collect results
-results_df = collect_experiment_results()
-
-# Filter results by disease if specified
-if args.disease != 'all':
-    results_df = results_df[results_df['disease'] == args.disease]
-    print(f"Analyzing results for {args.disease} disease only")
-else:
-    print("Analyzing results for all diseases")
-
-# Debug: Print detected modes and paths
-print(f"\nDetected modes and corresponding paths for {args.disease if args.disease != 'all' else 'all diseases'}:")
-for mode in ['teacher', 'student1', 'student2']:
-    sample_rows = results_df[results_df['mode'] == mode].head(3)
-    if not sample_rows.empty:
-        print(f"\n{mode} examples:")
-        for _, row in sample_rows.iterrows():
-            print(f"  - {row['config_info']} -> {row['mode']}")
-
-# Process each disease separately or all together
-diseases_to_process = [args.disease] if args.disease != 'all' else results_df['disease'].unique()
-
-for disease_to_process in diseases_to_process:
-    # Skip if not processing a specific disease
-    if disease_to_process == 'all':
-        # Create comprehensive tables for all diseases combined
-        disease_results = results_df
-        disease_prefix = ""
-    else:
-        # Filter for the current disease
-        disease_results = results_df[results_df['disease'] == disease_to_process]
-        disease_prefix = f"{disease_to_process}_"
-        
-        if disease_results.empty:
-            print(f"No results found for disease: {disease_to_process}")
-            continue
+# --- 使用示例 ---
+if __name__ == "__main__":
+    # 定义疾病列表
+    diseases = ['ad', 'ms', 'uc', 'af']
     
-    print(f"\n\nProcessing results for {disease_prefix}diseases")
+    # # 处理特定实验
+    # experiment_path = '/data3/lihan/projects/zisen/ageaware/experiments/test_new_data_2'
+    # process_experiment(experiment_path, diseases)
     
-    # Create comprehensive table with experiment results (mean and std)
-    print(f"\nComprehensive Table with Experiment Results for {disease_prefix}diseases:")
-    
-    # Create DataFrame to store the comprehensive results
-    rows_list = []
-    index_tuples = []
-    
-    # For each experiment group
-    for group in sorted(disease_results['experiment_group'].unique()):
-        group_df = disease_results[disease_results['experiment_group'] == group]
-        
-        # If processing all diseases, include disease in grouping
-        if disease_to_process == 'all':
-            # For each disease
-            for disease in sorted(group_df['disease'].unique()):
-                disease_df = group_df[group_df['disease'] == disease]
-                
-                # For each model type
-                for model in sorted(disease_df['model_type'].unique()):
-                    model_df = disease_df[disease_df['model_type'] == model]
-                    
-                    # Create row for this experiment
-                    row_data = {}
-                    
-                    # Add teacher, student1, student2 results in that order
-                    for mode in ['teacher', 'student1', 'student2']:
-                        mode_df = model_df[model_df['mode'] == mode]
-                        if not mode_df.empty:
-                            # Get first matching result
-                            row = mode_df.iloc[0]
-                            row_data[f'{mode}_mean'] = row['auprc_mean']
-                            row_data[f'{mode}_std'] = row['auprc_std']
-                        else:
-                            # If no result for this mode, use NaN
-                            row_data[f'{mode}_mean'] = np.nan
-                            row_data[f'{mode}_std'] = np.nan
-                    
-                    # Add row data to list
-                    rows_list.append(row_data)
-                    # Add index tuple for this row
-                    index_tuples.append((group, disease, model))
-        else:
-            # For each model type
-            for model in sorted(group_df['model_type'].unique()):
-                model_df = group_df[group_df['model_type'] == model]
-                
-                # Create row for this experiment
-                row_data = {}
-                
-                # Add teacher, student1, student2 results in that order
-                for mode in ['teacher', 'student1', 'student2']:
-                    mode_df = model_df[model_df['mode'] == mode]
-                    if not mode_df.empty:
-                        # Get first matching result
-                        row = mode_df.iloc[0]
-                        row_data[f'{mode}_mean'] = row['auprc_mean']
-                        row_data[f'{mode}_std'] = row['auprc_std']
-                    else:
-                        # If no result for this mode, use NaN
-                        row_data[f'{mode}_mean'] = np.nan
-                        row_data[f'{mode}_std'] = np.nan
-                
-                # Add row data to list
-                rows_list.append(row_data)
-                # Add index tuple for this row
-                if disease_to_process == 'all':
-                    index_tuples.append((group, model))
-                else:
-                    index_tuples.append((group, model))
-    
-    # Create a MultiIndex
-    if disease_to_process == 'all':
-        multi_idx = pd.MultiIndex.from_tuples(index_tuples, names=['Experiment Group', 'Disease', 'Model Type'])
-    else:
-        multi_idx = pd.MultiIndex.from_tuples(index_tuples, names=['Experiment Group', 'Model Type'])
-    
-    # Create the DataFrame with the MultiIndex
-    all_results = pd.DataFrame(rows_list, index=multi_idx)
-    
-    # Reorder columns to ensure teacher, student1, student2 order
-    ordered_columns = []
-    for mode in ['teacher', 'student1', 'student2']:
-        if f'{mode}_mean' in all_results.columns:
-            ordered_columns.append(f'{mode}_mean')
-        if f'{mode}_std' in all_results.columns:
-            ordered_columns.append(f'{mode}_std')
-    
-    all_results = all_results[ordered_columns]
-    
-    # Format the table for display
-    pd.set_option('display.max_rows', None)
-    pd.set_option('display.max_columns', None)
-    pd.set_option('display.width', 1000)
-    print(all_results)
-    
-    # Create a formatted version with mean±std
-    print(f"\nFormatted Table (mean±std) for {disease_prefix}diseases:")
-    formatted_results = pd.DataFrame(index=all_results.index)
-    
-    for mode in ['teacher', 'student1', 'student2']:
-        mean_col = f'{mode}_mean'
-        std_col = f'{mode}_std'
-        
-        if mean_col in all_results.columns and std_col in all_results.columns:
-            formatted_results[mode] = all_results.apply(
-                lambda row: f"{row[mean_col]:.4f}±{row[std_col]:.4f}" if not pd.isna(row[mean_col]) else "",
-                axis=1
-            )
-    
-    print(formatted_results)
-    
-    # Save to CSV with disease prefix
-    csv_filename = f"{disease_prefix}all_experiment_results.csv"
-    formatted_csv_filename = f"{disease_prefix}formatted_experiment_results.csv"
-    
-    all_results.to_csv(csv_filename)
-    formatted_results.to_csv(formatted_csv_filename)
-    print(f"\nDetailed results saved to '{csv_filename}' and '{formatted_csv_filename}'")
-
-# Create ablation experiment comparison chart
-if any(results_df['experiment_group'].str.startswith('ab_')):
-    plt.figure(figsize=(15, 10))
-    
-    # Filter ablation experiment results
-    ablation_results = results_df[results_df['experiment_group'].str.startswith('ab_')].copy()
-    
-    # Arrange experiment groups in order - using .loc to avoid the warning
-    ablation_order = ['ab_age1_adv', 'ab_age1_consist', 'ab_age2_ageloss', 
-                      'ab_age2_disentangle', 'ab_age2_consist', 'ab_age2_ageloss_disentangle']
-    ablation_results.loc[:, 'group_order'] = pd.Categorical(
-        ablation_results['experiment_group'],
-        categories=ablation_order,
-        ordered=True
-    )
-    ablation_results = ablation_results.sort_values('group_order')
-
-# Summary report
-print("\n\nExperiment Results Summary Report")
-print("=" * 50)
-print(f"Total experiment groups: {len(results_df['experiment_group'].unique())}")
-print(f"Disease types: {', '.join(results_df['disease'].unique())}")
-print(f"Model types: {', '.join(results_df['model_type'].unique())}")
-
-# Find the best model for each disease
-for disease in sorted(results_df['disease'].unique()):
-    print(f"\nBest performing models for {disease} disease:")
-    for mode in ['teacher', 'student1', 'student2']:
-        subset = results_df[(results_df['disease'] == disease) & (results_df['mode'] == mode)]
-        if not subset.empty:
-            best_row = subset.loc[subset['auprc_mean'].idxmax()]
-            print(f"- {mode}: {best_row['model_type']} (Experiment Group: {best_row['experiment_group']}) - AUPRC: {best_row['auprc_mean']:.4f}±{best_row['auprc_std']:.4f}")
+    experiments = [
+        # '/data3/lihan/projects/zisen/ageaware/experiments/test_new_data_lc_5',
+        # '/data3/lihan/projects/zisen/ageaware/experiments/test_new_data_lc_11',
+        # '/data3/lihan/projects/zisen/ageaware/experiments/test_new_data_lc_12',
+        # '/data3/lihan/projects/zisen/ageaware/experiments/test_new_data_lc_13',
+        # '/data3/lihan/projects/zisen/ageaware/experiments/test_new_data_lc_14',
+        # '/data3/lihan/projects/zisen/ageaware/experiments/test_new_data_lc_15',
+        # '/data3/lihan/projects/zisen/ageaware/experiments/test_new_data_lc_16',
+        # '/data3/lihan/projects/zisen/ageaware/experiments/test_new_data_lc_17',
+        '/data3/lihan/projects/zisen/ageaware/experiments/test_new_data_lc_new1',
+        '/data3/lihan/projects/zisen/ageaware/experiments/test_new_data_lc_new2',
+        '/data3/lihan/projects/zisen/ageaware/experiments/test_new_data_lc_new3',
+        # '/data3/lihan/projects/zisen/ageaware/experiments/test_new_data_s2',
+        # '/data3/lihan/projects/zisen/ageaware/experiments/test_new_data_s3',
+        # '/data3/lihan/projects/zisen/ageaware/experiments/test_new_data_s4',
+        # '/data3/lihan/projects/zisen/ageaware/experiments/test_new_data_s5',
+        # '/data3/lihan/projects/zisen/ageaware/experiments/test_new_data_s7',
+        # '/data3/lihan/projects/zisen/ageaware/experiments/test_new_data_s8',
+        # '/data3/lihan/projects/zisen/ageaware/experiments/test_new_data_s9',
+        # '/data3/lihan/projects/zisen/ageaware/experiments/test_new_data_s10',
+        # '/data3/lihan/projects/zisen/ageaware/experiments/test_new_data_gce_1',
+        # '/data3/lihan/projects/zisen/ageaware/experiments/test_new_data_gce_2',
+        # '/data3/lihan/projects/zisen/ageaware/experiments/test_new_data_gce_3',
+        # '/data3/lihan/projects/zisen/ageaware/experiments/test_new_data_gce_4',
+        # '/data3/lihan/projects/zisen/ageaware/experiments/test_new_data_mixup_1',
+        # '/data3/lihan/projects/zisen/ageaware/experiments/test_new_data_mixup_2',
+    ]
+    for exp_path in experiments:
+        process_experiment(exp_path, diseases)

@@ -1,5 +1,7 @@
 source /data3/lihan/miniconda3/bin/activate ageaware
 
+CUDA_VISIBLE_DEVICES=1
+
 python src/demo.py
 
 python src/table.py --disease ad
@@ -8,6 +10,10 @@ python src/table.py --disease uc
 python src/table.py --disease all
 
 python src/analyze_age_matrix_2.py
+
+CUDA_VISIBLE_DEVICES=0 python scripts/train4.py --exp_name test --mode teacher
+ --teacher_type UGP_v1 --data_dir ./data/ad_new --lr 1e-5 --n_runs 2 --n_steps 100;
+CUDA_VISIBLE_DEVICES=0 python scripts/train4.py --exp_name test --mode student --teacher_type UGP_v1 --student_type UGP_v1 --data_dir ./data/ad_new --teacher_model_exp_name full --teacher_model_lr 1e-5 --lr 1e-4 --n_runs 2 --n_steps 100;
 
 python scripts/train_classical.py --mode teacher --data_dir ./data/ms --model_type XGBoost --exp_name test_classical;
 python scripts/train_classical.py --mode student --data_dir ./data/ms --model_type XGBoost --teacher_type XGBoost --teacher_model_exp_name test_classical --exp_name test_classical;

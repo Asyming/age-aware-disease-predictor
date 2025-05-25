@@ -1,4 +1,6 @@
 import os
+import sys
+sys.path.append(os.path.abspath("/data3/lihan/projects/zisen/ageaware"))
 import numpy as np
 import random
 import torch
@@ -6,6 +8,7 @@ import matplotlib.pyplot as plt
 from sklearn.metrics import precision_recall_curve
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
+from src.teacher_models import *
 
 def set_random_seed(seed=22):
     """Set random seeds for reproducibility"""
@@ -69,21 +72,20 @@ def split_by_age(labels, ages, age_threshold, n_splits=6):
     
     return splits
 
-def generate_cumulative_ages(original_tensor, mask, max_age=70, min_age=40):
-    """Generate cumulative ages"""
-    mask = mask.bool()
-    device = original_tensor.device
-    mask = mask.to(device)
-    
-    upper_bounds = torch.where(mask, max_age, original_tensor)
-    lower_bounds = torch.where(mask, original_tensor, min_age)
-    ranges = upper_bounds - lower_bounds + 1
-    
-    rand = torch.rand(original_tensor.shape, device=device)
-    random_offsets = (rand * ranges.float()).long()
-    cumulative_ages = lower_bounds + random_offsets
-
-    return cumulative_ages
+def check_data(info_df, train_indices, val_indices, test_indices, run_id, age_threshold):
+    print(f"\nSplit {run_id} Data Distribution:")
+    print(f"Train set: {len(train_indices)} samples")
+    print(f"Pos/Neg: {np.sum(info_df.loc[train_indices, 'label'] == 1)}/"
+        f"{np.sum(info_df.loc[train_indices, 'label'] == 0)}")
+    print(f"Positive ratio: {np.mean(info_df.loc[train_indices, 'label'] == 1):.3f}")
+    print(f"\nValidation set: {len(val_indices)} samples")
+    print(f"Pos/Neg: {np.sum(info_df.loc[val_indices, 'label'] == 1)}/"
+        f"{np.sum(info_df.loc[val_indices, 'label'] == 0)}")
+    print(f"Positive ratio: {np.mean(info_df.loc[val_indices, 'label'] == 1):.3f}")
+    print(f"\nTest set (age >= {age_threshold}): {len(test_indices)} samples")
+    print(f"Pos/Neg: {np.sum(info_df.loc[test_indices, 'label'] == 1)}/"
+        f"{np.sum(info_df.loc[test_indices, 'label'] == 0)}")
+    print(f"Positive ratio: {np.mean(info_df.loc[test_indices, 'label'] == 1):.3f}")
 
 def plot_pr_curves(results_bce, results_kd, run_id, save_path):
     """Plot and save PR curves"""
@@ -231,3 +233,91 @@ def gradient_clipping(model, gradnorm_queue):
         print(f'Clipped gradient with value {grad_norm:.2f}, '
               f'allowed maximum value is {max_grad_norm:.2f}')
     return grad_norm
+
+def get_model(model_type, d_input, n_snps, n_genes, args, device):
+    if model_type == "MLP":
+        model = MLP(d_input, d_hidden=args.d_hidden).to(device)
+    elif model_type == "ctrMLP":
+        model = ctrMLP(d_input, d_hidden=args.d_hidden, ema=args.ema, pos_tau=args.pos_tau, neg_tau=args.neg_tau, neg_rate=args.neg_rate, lamb=args.lamb).to(device)
+    elif model_type == "AgeAwareMLP1":
+        model = AgeAwareMLP1(d_input, d_hidden=args.d_hidden, use_consist=args.age1_use_consist, use_adversarial=args.age1_use_adversarial, use_cumulative_rate=args.use_cumulative_rate).to(device)
+    elif model_type == "AgeAwareMLP2":
+        model = AgeAwareMLP2(d_input, d_hidden=args.d_hidden, use_consist=args.age2_use_consist, use_ageloss=args.age2_use_ageloss, use_disentangle=args.age2_use_disentangle, use_cumulative_rate=args.use_cumulative_rate).to(device)
+    elif model_type == "UGP_v1":
+        model = UGP_v1(n_snps=n_snps, n_genes=n_genes, snp_dropout=args.snp_dropout, gene_dropout=args.gene_dropout).to(device)
+    elif model_type == "UGP_v2":
+        model = UGP_v2(n_snps=n_snps, n_genes=n_genes, snp_dropout=args.snp_dropout, gene_dropout=args.gene_dropout).to(device)
+    elif model_type == "UGP_v3":
+        model = UGP_v3(n_snps=n_snps, n_genes=n_genes, snp_dropout=args.snp_dropout, gene_dropout=args.gene_dropout, n_gnn_layers=args.n_gnn_layers).to(device)
+    elif model_type == "ctrUGP_v1":
+        model = ctrUGP_v1(n_snps=n_snps, n_genes=n_genes, age_threshold=args.age_threshold, d_hidden=args.d_hidden, gene_dropout=args.gene_dropout, snp_dropout=args.snp_dropout, n_gnn_layers=args.n_gnn_layers, ema=args.ema, pos_tau=args.pos_tau, neg_tau=args.neg_tau, neg_rate=args.neg_rate, lamb=args.lamb).to(device)
+    elif model_type == "AgeUGP_v1":
+        model = AgeUGP_v1(n_snps=n_snps, n_genes=n_genes, snp_dropout=args.snp_dropout, gene_dropout=args.gene_dropout, use_adversarial=args.age1_use_adversarial, use_consist=args.age1_use_consist, use_cumulative_rate=args.use_cumulative_rate).to(device)
+    elif model_type == "AgeUGP_v2":
+        model = AgeUGP_v2(n_snps=n_snps, n_genes=n_genes, snp_dropout=args.snp_dropout, gene_dropout=args.gene_dropout, use_disentangle=args.age2_use_disentangle, use_ageloss=args.age2_use_ageloss, use_consist=args.age2_use_consist, use_cumulative_rate=args.use_cumulative_rate).to(device)
+    else:
+        raise ValueError(f"Unknown model type: {model_type}")
+    return model
+
+def get_optimizer(model, model_type, lr, use_adaptive_lr):
+    if use_adaptive_lr:
+        param_groups = []
+        if model_type in ["AgeAwareMLP1", "AgeAwareMLP2"]:
+            if hasattr(model, 'age_layer'):
+                param_groups.append({
+                    'params': model.age_layer.parameters(),
+                    'lr': lr * 0.1
+                })
+            if hasattr(model, 'age_predictor'):
+                 param_groups.append({
+                    'params': model.age_predictor.parameters(),
+                    'lr': lr * 0.1
+                })
+        if model_type in ["MLP", "AgeAwareMLP1", "AgeAwareMLP2"]:
+             if hasattr(model, 'model'):
+                param_groups.append({
+                    'params': model.model.parameters(),
+                    'lr': lr
+                })
+        if model_type == "AgeAwareMLP2":
+            if hasattr(model, 'main_head'):
+                param_groups.append({
+                    'params': model.main_head.parameters(),
+                    'lr': lr
+                })
+        grouped_param_ids = set()
+        for group in param_groups:
+            for param in group['params']:
+                grouped_param_ids.add(id(param))
+
+        remaining_params = [p for p in model.parameters() if id(p) not in grouped_param_ids]
+        if remaining_params:
+             param_groups.append({
+                'params': remaining_params,
+                'lr': lr
+            })
+        
+        param_groups = [pg for pg in param_groups if pg['params']]
+
+        if not param_groups:
+             print("Warning: No parameters passed to the optimizer. Using default settings.")
+             optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
+        else:
+            optimizer = torch.optim.AdamW(param_groups)
+
+    else:
+        optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
+    return optimizer
+
+def mixup(inputs, labels, alpha=0.4):
+    if alpha > 0:
+        lam = np.random.beta(alpha, alpha)
+    else:
+        lam = 1
+    batch_size = inputs.size(0)
+    index = torch.randperm(batch_size)
+    mixed_inputs = lam * inputs + (1 - lam) * inputs[index]
+    mixed_labels = lam * labels + (1 - lam) * labels[index]
+    return mixed_inputs, mixed_labels, lam
+    
+    

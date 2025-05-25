@@ -1,4 +1,5 @@
 data/
+old_data/
 *.png
 *.csv
 *.pth
@@ -6,3 +7,16 @@ plots/
 experiments/
 *.ipynb
 plots/
+demo.py
+.vscode/
+## src
+src/analyze_age_matrix_2.py
+src/crtt.py
+src/demo.py
+src/extract_file.py
+src/extract_file_combined.py
+src/simsias_models.py
+src/table.py
+## scripts
+scripts/train4.bat
+scripts/train3.py

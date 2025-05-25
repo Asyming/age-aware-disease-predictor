@@ -1,26 +1,6 @@
 import torch
 from torch import nn
-import torch.nn.functional as F
 
-# class KDLoss(nn.Module):
-#     def __init__(self, temperature=2.0, alpha=0.1):
-#         super().__init__()
-#         self.T = temperature
-#         self.alpha = alpha
-#         self.bce = nn.BCEWithLogitsLoss()
-        
-#     def forward(self, student_logits, labels, teacher_outputs):
-#         teacher_logits = teacher_outputs  
-#         hard_loss = self.bce(student_logits, labels)
-#         soft_student = student_logits / self.T
-#         soft_teacher = teacher_logits.detach() / self.T
-#         soft_loss = F.binary_cross_entropy_with_logits(
-#             soft_student,
-#             torch.sigmoid(soft_teacher)
-#         )
-#         loss = self.alpha * hard_loss + (1 - self.alpha) * soft_loss * (self.T ** 2)
-#         return loss
-    
 class KDLoss(nn.Module):
     def __init__(self, temperature=2.0, alpha=0.1):
         super().__init__()
@@ -42,3 +22,30 @@ class KDLoss(nn.Module):
 
         total_loss = self.alpha * hard_loss + (1 - self.alpha) * soft_loss * (self.T ** 2)
         return total_loss
+    
+class BGCELoss(nn.Module):
+    def __init__(self, q=0.7):
+        super().__init__()
+        self.q = q
+        self.bce = nn.BCEWithLogitsLoss()
+    def forward(self, logits, labels):
+        p = torch.sigmoid(logits)
+        p_j = labels * p + (1 - labels) * (1 - p)
+        if self.q == 0:
+            loss = self.bce(logits, labels)
+        else:
+            loss = ((1 - torch.pow(p_j, self.q)) / self.q).mean()
+        return loss
+    
+# TODO: add peer loss/DMI loss/SCE loss
+class PeerLoss(nn.Module):
+    def __init__(self):
+        super().__init__()
+
+class DMILoss(nn.Module):
+    def __init__(self):
+        super().__init__()
+
+class SCELoss(nn.Module):
+    def __init__(self):
+        super().__init__()
