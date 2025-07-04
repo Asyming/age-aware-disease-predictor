@@ -41,7 +41,7 @@ class GradientReverseLayer(torch.autograd.Function):
         return ctx.alpha * grad_output.neg(), None
 
 class MLP(nn.Module):
-    def __init__(self, d_input,d_hidden):
+    def __init__(self, d_input, d_hidden, num_labels=1):
         super().__init__()
         self.model = nn.Sequential(
             nn.Linear(d_input, d_hidden),
@@ -53,7 +53,7 @@ class MLP(nn.Module):
             nn.BatchNorm1d(16),
             nn.ReLU(),
 
-            nn.Linear(16, 1)
+            nn.Linear(16, num_labels)
         )
         self.apply(lambda module: bert_init_params(module))
     def forward(self, x):
@@ -258,12 +258,12 @@ class AgeAwareMLP1(nn.Module):
 
         age_norm = (age - 40) / (70 - 40)
         neg_mask = (1 - labels.float())
-        consist_weight = 0.0 if not self.use_consist else 1.0
+        consist_weight = 0.0 if not self.use_consist else 0.1
         age_weight = 0.0
         if self.use_adversarial:
             features_rev = GradientReverseLayer.apply(features, 0.01)
             age_pred = self.age_predictor(features_rev)
-            age_weight = 0.5
+            age_weight = 0.0
             age_loss = F.l1_loss(age_pred.squeeze(), age_norm) # always use original age
         else: age_loss = 0.0
 
@@ -384,7 +384,7 @@ class AgeAwareMLP2(nn.Module):
         final_probs = (1 - neg_mask) * original_probs + neg_mask * updated_probs
         final_logits = torch.log(final_probs / (1 - final_probs + 1e-7))
         
-        consist_weight = 0.0 if not self.use_consist else 1.0
+        consist_weight = 0.0 if not self.use_consist else 0.1
         age_weight = 0.0 if not self.use_ageloss else 0.5
         disentangle_weight = 0.0 if not self.use_disentangle else 0.5
         final_loss = consist_weight * consistency_loss + age_weight * age_loss + disentangle_weight * disentangle_loss
@@ -789,55 +789,127 @@ class elrUGP(nn.Module):
         super().__init__()
 
 
-# UGP_v1 with AgeAwareMLP1
+# UGP_v3 with AgeAwareMLP1
 class AgeUGP_v1(nn.Module):
-    """UGP model with age-aware layer and adversarial training from AgeAwareMLP1"""
-    def __init__(self, n_snps, n_genes, d_hidden=64, n_filters=8, gene_dropout=0, snp_dropout=0, use_adversarial=True, use_consist=True, use_cumulative_rate=False):
+    """UGP model with age-aware layer and adversarial training"""
+    def __init__(self, n_snps, n_genes, d_hidden=64, n_filters=8, gene_dropout=0, snp_dropout=0, n_gnn_layers=2, use_adversarial=True, use_consist=True, use_cumulative_rate=False):
         super().__init__()
-        self.n_filters = n_filters
         self.use_adversarial = use_adversarial
         self.use_consist = use_consist
         self.use_cumulative_rate = use_cumulative_rate
         
+        # UGP_v3 feature extraction components
+        self.n_filters = n_filters
         self.filter_list = nn.ParameterList()
         for _ in range(n_filters):
             self.filter_list.append(nn.Parameter(torch.randn(n_snps)*0.001))
         
-        self.feature_extractor = nn.Sequential(
-            nn.Dropout(gene_dropout),
-            nn.Linear(n_genes, d_hidden),
+        self.gene_encoder = nn.Sequential(
+            nn.Linear(n_filters, d_hidden),
             nn.BatchNorm1d(d_hidden),
             nn.ReLU(),
-            nn.Dropout(0.5),
-
-            nn.Linear(d_hidden, d_hidden),
-            nn.BatchNorm1d(d_hidden),
-            nn.ReLU(),
-            nn.Dropout(0.5)
+            nn.Linear(d_hidden, d_hidden)
         )
-        self.predictor = nn.Linear(d_hidden, 1)
-        self.age_predictor = nn.Sequential(
-            nn.Linear(d_hidden, 1),
+        
+        # GNN components
+        self.gnn_layer_list = nn.ModuleList()
+        self.batch_norm_list = nn.ModuleList()
+        for _ in range(n_gnn_layers):
+            gin_mlp = nn.Sequential(
+                nn.Linear(d_hidden, d_hidden*2),
+                nn.BatchNorm1d(d_hidden*2),
+                nn.ReLU(),
+                nn.Linear(d_hidden*2, d_hidden)
+            )
+            self.gnn_layer_list.append(
+                dgl.nn.GINConv(gin_mlp, learn_eps=False, aggregator_type='sum')
+            )
+            self.batch_norm_list.append(nn.BatchNorm1d(d_hidden))
+        
+        # Attention components
+        self.attention_key = nn.Linear(d_hidden, d_hidden)
+        self.attention_query = nn.Sequential(
+            nn.Linear(d_hidden, 1, bias=False),
             nn.Sigmoid()
         )
-        # Age-aware layer from AgeAwareMLP1
+        self.attention_value = nn.Linear(d_hidden, d_hidden)
+        
+        # AgeAwareMLP1 components
+        self.feature_dim = d_hidden  # Use d_hidden as feature dimension
+        self.predictor = nn.Sequential(
+            nn.Dropout(gene_dropout),
+            nn.Linear(d_hidden, 64),
+            nn.BatchNorm1d(64),
+            nn.ReLU(),
+            nn.Dropout(0.5),
+            nn.Linear(64, 16),
+            nn.BatchNorm1d(16),
+            nn.ReLU(),
+            nn.Linear(16, 1)
+        )
+        
         self.age_layer = nn.Sequential(
             nn.Linear(1, 8),
             nn.ReLU(),
             nn.Linear(8, 2)
         )
+
+        self.age_predictor = nn.Sequential(
+            nn.Linear(self.feature_dim, 1),
+            nn.Sigmoid()
+        )
+
+        self.dropout = nn.Dropout(snp_dropout)
         self.apply(lambda module: bert_init_params(module))
         with torch.no_grad():
             nn.init.normal_(self.age_layer[-1].weight, mean=0, std=0.01)
             self.age_layer[-1].bias.data.copy_(torch.tensor([0., 1.]))
-        self.dropout = nn.Dropout(snp_dropout)
+
+    def attentive_readout(self, g, feat):
+        with g.local_scope():
+            keys = self.attention_key(feat)
+            g.ndata['w'] = self.attention_query(keys)
+            g.ndata['v'] = self.attention_value(feat)
+            h = dgl.readout.sum_nodes(g, 'v', 'w')
+            return h, g.ndata['w']
+
+    def extract_features(self, snp, snp_ids, batched_g, gene_g):
+        """Extract features using UGP_v3 method"""
+        batch_size = len(snp)
+        snp = snp.reshape(batch_size, -1, 1)
+        snp_h_list = []
+        for i in range(self.n_filters):
+            snp_h_list.append(torch.einsum('bnd,n->bnd', self.dropout(snp), self.filter_list[i]))
+        snp_h = torch.concatenate(snp_h_list, dim=-1)
+
+        gene_features_list = []
+        for i in range(batch_size):
+            batched_g.ndata['h'] = torch.index_select(snp_h[i], 0, snp_ids)
+            gene_features = dgl.readout_nodes(batched_g, 'h', op='sum')
+            gene_features_list.append(gene_features)
+        h = torch.cat(gene_features_list, dim=0)
+
+        # Gene encoder
+        h = self.gene_encoder(h)
+        batched_gene_g = dgl.batch([gene_g] * batch_size)
+        
+        # GNN processing
+        hidden_rep = [h]
+        for i in range(len(self.gnn_layer_list)):
+            h = self.gnn_layer_list[i](batched_gene_g, h)
+            h = self.batch_norm_list[i](h)
+            h = F.relu(h)
+            hidden_rep.append(h)
+        
+        # Attentive readout
+        g_h, weights = self.attentive_readout(batched_gene_g, hidden_rep[-1])
+        return g_h, weights
 
     def get_transition_matrix(self, age_norm, age_cumulative_norm=None):
         if age_cumulative_norm is not None:
             pos_trans = self.age_layer(age_cumulative_norm)
         else:
             pos_trans = self.age_layer(age_norm)
-
         age_ori = age_norm * (70 - 40) + 40
         pos_probs = F.softmax(pos_trans, dim=1)
         # debug
@@ -847,108 +919,126 @@ class AgeUGP_v1(nn.Module):
             print(f"After softmax: {pos_probs[0]}")
         batch_size = age_norm.shape[0]
         trans_matrix = torch.zeros(batch_size, 2, 2, device=age_norm.device)
-        trans_matrix[:, 0, 0] = 1.0    # p00
-        trans_matrix[:, 0, 1] = 0.0    # p01
+        trans_matrix[:, 0, 0] = 1.0    # p00 = 1.0
+        trans_matrix[:, 0, 1] = 0.0    # p01 = 0.0
         trans_matrix[:, 1, 0] = pos_probs[:, 0]  # p10
         trans_matrix[:, 1, 1] = pos_probs[:, 1]  # p11
         return trans_matrix
-    
-    def forward(self, snp, snp_ids, g, age=None, labels=None):
-        batch_size = len(snp)
-        sample_h = []
-        snp = snp.reshape(batch_size,-1,1)
-        snp_h_list = []
-        for i in range(self.n_filters):
-            snp_h_list.append(torch.einsum('bnd,n->bnd', self.dropout(snp), self.filter_list[i]))
-        snp_h = torch.concatenate(snp_h_list, dim=-1)
-        
-        for i in range(batch_size): 
-            g.ndata['h'] = torch.index_select(snp_h[i],0,snp_ids)
-            sample_h.append(torch.mean(dgl.readout_nodes(g, 'h', op='sum'),dim=-1).reshape(-1))
-        sample_h = torch.stack(sample_h, dim=0)
-        
-        features = self.feature_extractor(sample_h)
+
+    def forward(self, snp, snp_ids, batched_g, gene_g, age=None, labels=None):
+        # Extract features using UGP_v3 method
+        features, weights = self.extract_features(snp, snp_ids, batched_g, gene_g)
         original_logits = self.predictor(features)
-        
-        filter_list = []
-        for i in range(self.n_filters):
-            filter_list.append(self.filter_list[i])
+        assert not torch.isnan(original_logits).any(), "[AgeUGP_v1] lr maybe too high!"
         
         if age is None or labels is None:
-            return original_logits#, torch.stack(filter_list, dim=0)
-            
+            filter_list = [self.filter_list[i] for i in range(self.n_filters)]
+            return original_logits, torch.stack(filter_list, dim=0), weights
+
         if self.use_cumulative_rate:
             age_cumulative = generate_cumulative_ages(age, mask=labels)
             age_cumulative_norm = (age_cumulative - 40) / (70 - 40)
-            
+
         age_norm = (age - 40) / (70 - 40)
         neg_mask = (1 - labels.float())
-        consist_weight = 0.0 if not self.use_consist else 1.0   
+        consist_weight = 0.0 if not self.use_consist else 0.1
+        
         if self.use_adversarial:
-            features_rev = GradientReverseLayer.apply(features, 0.01)
+            features_rev = GradientReverseLayer.apply(features, 0.1)
             age_pred = self.age_predictor(features_rev)
-            age_weight = 0.5
             age_loss = F.l1_loss(age_pred.squeeze(), age_norm)
-        else:
-            age_weight = 0.0
+            age_weight = 0.1
+        else: 
             age_loss = 0.0
-            
+            age_weight = 0.0
+
         trans_matrix = self.get_transition_matrix(age_norm, age_cumulative_norm) if self.use_cumulative_rate else self.get_transition_matrix(age_norm)
         original_probs = torch.sigmoid(original_logits)
         original_probs = torch.clamp(original_probs, 1e-7, 1-1e-7)
-        
         neg_dist = torch.cat([1 - original_probs, original_probs], dim=1)
         updated_dist = torch.bmm(neg_dist.unsqueeze(1), trans_matrix)
         updated_probs = updated_dist.squeeze(1)[:, 1:2]
         
-        assert len(updated_probs[labels==1]) > 0
-        consistency_loss = F.binary_cross_entropy(updated_probs[labels==1], original_probs[labels==1])
-        
+        if len(updated_probs[labels==1]) > 0:
+            consistency_loss = F.binary_cross_entropy(updated_probs[labels==1], original_probs[labels==1])
+        else:
+            consistency_loss = torch.tensor(0.0, device=age.device)
+
         final_probs = (1 - neg_mask) * original_probs + neg_mask * updated_probs
         final_logits = torch.log(final_probs / (1 - final_probs + 1e-7))
         
         final_loss = consist_weight * consistency_loss + age_weight * age_loss
         
-        return final_logits, original_logits, final_loss
+        filter_list = [self.filter_list[i] for i in range(self.n_filters)]
+        return final_logits, original_logits, final_loss, torch.stack(filter_list, dim=0), weights
 
-# UGP_v1 with AgeAwareMLP2
+
+# UGP_v3 with AgeAwareMLP2
 class AgeUGP_v2(nn.Module):
-    """UGP model with feature disentanglement for age-related features from AgeAwareMLP2"""
-    def __init__(self, n_snps, n_genes, d_hidden=64, n_filters=8, gene_dropout=0, snp_dropout=0, use_ageloss=True, use_disentangle=True, use_consist=True, use_cumulative_rate=False):
+    """UGP model with feature disentanglement for age-related features"""
+    def __init__(self, n_snps, n_genes, d_hidden=64, n_filters=8, gene_dropout=0, snp_dropout=0, n_gnn_layers=2, use_ageloss=True, use_disentangle=True, use_consist=True, use_cumulative_rate=False):
         super().__init__()
-        self.n_filters = n_filters
         self.use_ageloss = use_ageloss
         self.use_disentangle = use_disentangle
         self.use_consist = use_consist
         self.use_cumulative_rate = use_cumulative_rate
         
-        self.feature_dim = 16
-        self.main_dim = 15
-        self.age_dim = 1
-        
+        # UGP_v3 feature extraction components
+        self.n_filters = n_filters
         self.filter_list = nn.ParameterList()
         for _ in range(n_filters):
             self.filter_list.append(nn.Parameter(torch.randn(n_snps)*0.001))
         
-        self.feature_extractor = nn.Sequential(
-            nn.Dropout(gene_dropout),
-            nn.Linear(n_genes, d_hidden),
+        self.gene_encoder = nn.Sequential(
+            nn.Linear(n_filters, d_hidden),
             nn.BatchNorm1d(d_hidden),
             nn.ReLU(),
-            nn.Dropout(0.5),
-
-            nn.Linear(d_hidden, self.feature_dim),
-            nn.BatchNorm1d(self.feature_dim),
-            nn.ReLU(),
+            nn.Linear(d_hidden, d_hidden)
         )
         
-        self.main_head = nn.Sequential(
-            nn.Linear(self.main_dim, 1)
+        # GNN components
+        self.gnn_layer_list = nn.ModuleList()
+        self.batch_norm_list = nn.ModuleList()
+        for _ in range(n_gnn_layers):
+            gin_mlp = nn.Sequential(
+                nn.Linear(d_hidden, d_hidden*2),
+                nn.BatchNorm1d(d_hidden*2),
+                nn.ReLU(),
+                nn.Linear(d_hidden*2, d_hidden)
+            )
+            self.gnn_layer_list.append(
+                dgl.nn.GINConv(gin_mlp, learn_eps=False, aggregator_type='sum')
+            )
+            self.batch_norm_list.append(nn.BatchNorm1d(d_hidden))
+        
+        # Attention components
+        self.attention_key = nn.Linear(d_hidden, d_hidden)
+        self.attention_query = nn.Sequential(
+            nn.Linear(d_hidden, 1, bias=False),
+            nn.Sigmoid()
         )
+        self.attention_value = nn.Linear(d_hidden, d_hidden)
+        
+        # AgeAwareMLP2 components
+        self.feature_dim = d_hidden
+        self.main_dim = d_hidden - 1  # Reserve 1 dimension for age
+        self.age_dim = 1
         
         self.age_predictor = nn.Sequential(
             nn.Linear(self.age_dim, 1),
             nn.Sigmoid()
+        )
+        
+        self.main_head = nn.Sequential(
+            nn.Dropout(gene_dropout),
+            nn.Linear(self.main_dim, 64),
+            nn.BatchNorm1d(64),
+            nn.ReLU(),
+            nn.Dropout(0.5),
+            nn.Linear(64, 16),
+            nn.BatchNorm1d(16),
+            nn.ReLU(),
+            nn.Linear(16, 1)
         )
         
         self.age_layer = nn.Sequential(
@@ -956,19 +1046,59 @@ class AgeUGP_v2(nn.Module):
             nn.ReLU(),
             nn.Linear(8, 2)
         )
-        
-        self.apply(lambda module: bert_init_params(module))        
+
+        self.dropout = nn.Dropout(snp_dropout)
+        self.apply(lambda module: bert_init_params(module))
         with torch.no_grad():
             nn.init.normal_(self.age_layer[-1].weight, mean=0, std=0.01)
             self.age_layer[-1].bias.data.copy_(torch.tensor([0., 1.]))
-        self.dropout = nn.Dropout(snp_dropout)
-    
-    def get_intermediate_features(self, sample_h):
-        features = self.feature_extractor(sample_h)
+
+    def attentive_readout(self, g, feat):
+        with g.local_scope():
+            keys = self.attention_key(feat)
+            g.ndata['w'] = self.attention_query(keys)
+            g.ndata['v'] = self.attention_value(feat)
+            h = dgl.readout.sum_nodes(g, 'v', 'w')
+            return h, g.ndata['w']
+
+    def extract_features(self, snp, snp_ids, batched_g, gene_g):
+        """Extract features using UGP_v3 method"""
+        batch_size = len(snp)
+        snp = snp.reshape(batch_size, -1, 1)
+        snp_h_list = []
+        for i in range(self.n_filters):
+            snp_h_list.append(torch.einsum('bnd,n->bnd', self.dropout(snp), self.filter_list[i]))
+        snp_h = torch.concatenate(snp_h_list, dim=-1)
+
+        gene_features_list = []
+        for i in range(batch_size):
+            batched_g.ndata['h'] = torch.index_select(snp_h[i], 0, snp_ids)
+            gene_features = dgl.readout_nodes(batched_g, 'h', op='sum')
+            gene_features_list.append(gene_features)
+        h = torch.cat(gene_features_list, dim=0)
+
+        # Gene encoder
+        h = self.gene_encoder(h)
+        batched_gene_g = dgl.batch([gene_g] * batch_size)
+        
+        # GNN processing
+        hidden_rep = [h]
+        for i in range(len(self.gnn_layer_list)):
+            h = self.gnn_layer_list[i](batched_gene_g, h)
+            h = self.batch_norm_list[i](h)
+            h = F.relu(h)
+            hidden_rep.append(h)
+        
+        # Attentive readout
+        g_h, weights = self.attentive_readout(batched_gene_g, hidden_rep[-1])
+        return g_h, weights
+
+    def get_intermediate_features(self, features):
+        """Split features into main and age components"""
         main_feat = features[:, :self.main_dim]
         age_feat = features[:, self.main_dim:]
         return main_feat, age_feat
-        
+
     def get_transition_matrix(self, age_norm, age_feat, age_cumulative_norm=None):
         if age_cumulative_norm is not None:
             combined_input = torch.cat([age_cumulative_norm, age_feat], dim=1)
@@ -978,13 +1108,10 @@ class AgeUGP_v2(nn.Module):
         age_ori = age_norm * (70 - 40) + 40
         pos_trans = self.age_layer(combined_input)
         pos_probs = F.softmax(pos_trans, dim=1)
-        
         # debug
         if torch.rand(1).item() < 0.01:
             print(f"Age: {age_ori[0].item():.1f}")
-            print(f"Before softmax: {pos_trans[0]}")
             print(f"After softmax: {pos_probs[0]}")
-            
         batch_size = age_norm.shape[0]
         trans_matrix = torch.zeros(batch_size, 2, 2, device=age_norm.device)
         trans_matrix[:, 0, 0] = 1.0
@@ -992,56 +1119,50 @@ class AgeUGP_v2(nn.Module):
         trans_matrix[:, 1, 0] = pos_probs[:, 0] # p10
         trans_matrix[:, 1, 1] = pos_probs[:, 1] # p11
         return trans_matrix
-    
-    def forward(self, snp, snp_ids, g, age=None, labels=None):
-        batch_size = len(snp)
-        sample_h = []
-        snp = snp.reshape(batch_size,-1,1)
-        snp_h_list = []
-        for i in range(self.n_filters):
-            snp_h_list.append(torch.einsum('bnd,n->bnd', self.dropout(snp), self.filter_list[i]))
-        snp_h = torch.concatenate(snp_h_list, dim=-1)
-        
-        for i in range(batch_size): 
-            g.ndata['h'] = torch.index_select(snp_h[i],0,snp_ids)
-            sample_h.append(torch.mean(dgl.readout_nodes(g, 'h', op='sum'),dim=-1).reshape(-1))
-        sample_h = torch.stack(sample_h, dim=0)
-        main_feat, age_feat = self.get_intermediate_features(sample_h)
+
+    def forward(self, snp, snp_ids, batched_g, gene_g, age=None, labels=None):
+        # Extract features using UGP_v3 method
+        features, weights = self.extract_features(snp, snp_ids, batched_g, gene_g)
+        main_feat, age_feat = self.get_intermediate_features(features)
         original_logits = self.main_head(main_feat)
+        assert not torch.isnan(original_logits).any(), "[AgeUGP_v2] lr maybe too high!"
         
         if age is None or labels is None:
-            return original_logits
-        
+            filter_list = [self.filter_list[i] for i in range(self.n_filters)]
+            return original_logits, torch.stack(filter_list, dim=0), weights
+            
         if self.use_cumulative_rate:
             age_cumulative = generate_cumulative_ages(age, mask=labels)
             age_cumulative_norm = (age_cumulative - 40) / (70 - 40)
-        else:
-            age_cumulative_norm = None
-        
+
         age_norm = (age - 40) / (70 - 40)
         age_pred = self.age_predictor(age_feat)
-        age_loss = F.l1_loss(age_pred.squeeze(), age_norm)
+        age_loss = F.l1_loss(age_pred.squeeze(), age_norm) # always use original age
         
+        batch_size = main_feat.size(0)
+        main_feat_normalized = F.normalize(main_feat, dim=1)
+        correlation = torch.mm(main_feat_normalized.t(), age_feat)
+        disentangle_loss = torch.norm(correlation, p='fro') / (batch_size * (main_feat.size(1) + age_feat.size(1)))
+
         trans_matrix = self.get_transition_matrix(age_norm, age_feat, age_cumulative_norm) if self.use_cumulative_rate else self.get_transition_matrix(age_norm, age_feat)
         original_probs = torch.sigmoid(original_logits)
         original_probs = torch.clamp(original_probs, 1e-7, 1-1e-7)
-        
         neg_mask = (1 - labels.float())
-        consist_weight = 0.0 if not self.use_consist else 1.0
-        age_weight = 0.0 if not self.use_ageloss else 0.5
-        age_loss = 0.0 if not self.use_ageloss else age_loss
         
         neg_dist = torch.cat([1 - original_probs, original_probs], dim=1)
         updated_dist = torch.bmm(neg_dist.unsqueeze(1), trans_matrix)
         updated_probs = updated_dist.squeeze(1)[:, 1:2]
-        print(f"updated_probs: {updated_probs}")
-        
         assert len(updated_probs[labels==1]) > 0
         consistency_loss = F.binary_cross_entropy(updated_probs[labels==1], original_probs[labels==1])
-        
+
         final_probs = (1 - neg_mask) * original_probs + neg_mask * updated_probs
         final_logits = torch.log(final_probs / (1 - final_probs + 1e-7))
         
-        final_loss = consist_weight * consistency_loss + age_weight * age_loss
-        
-        return final_logits, original_logits, final_loss
+        consist_weight = 0.0 if not self.use_consist else 0.1
+        age_weight = 0.0 if not self.use_ageloss else 0.1
+        disentangle_weight = 0.0 if not self.use_disentangle else 0.1
+        final_loss = consist_weight * consistency_loss + age_weight * age_loss + disentangle_weight * disentangle_loss
+
+        filter_list = [self.filter_list[i] for i in range(self.n_filters)]
+        return final_logits, original_logits, final_loss, torch.stack(filter_list, dim=0), weights
+    

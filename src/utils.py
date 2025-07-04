@@ -2,6 +2,7 @@ import os
 import sys
 sys.path.append(os.path.abspath("/data3/lihan/projects/zisen/ageaware"))
 import numpy as np
+import pandas as pd
 import random
 import torch
 import matplotlib.pyplot as plt
@@ -29,6 +30,13 @@ def collate_fn(batch):
     """Collate function for DataLoader"""
     feats = torch.from_numpy(np.stack([sample['feat'] for sample in batch])).float()
     labels = torch.FloatTensor([sample['label'] for sample in batch]).reshape(-1, 1)
+    ages = torch.FloatTensor([sample['age'] for sample in batch]).reshape(-1, 1)
+    return feats, labels, ages
+
+def collate_fn_mix(batch):
+    """Collate function for multi-label DataLoader"""
+    feats = torch.from_numpy(np.stack([sample['feat'] for sample in batch])).float()
+    labels = torch.stack([sample['label'] for sample in batch])
     ages = torch.FloatTensor([sample['age'] for sample in batch]).reshape(-1, 1)
     return feats, labels, ages
 
@@ -72,6 +80,56 @@ def split_by_age(labels, ages, age_threshold, n_splits=6):
     
     return splits
 
+def split_by_age_mix(labels, ages, age_threshold, n_splits=6):
+    seeds = [20 + i for i in range(n_splits)]
+    splits = []
+    if isinstance(labels[0], str):
+        parsed_labels = []  
+        for label in labels:
+            label_str = label.strip('[]')
+            ad_label, ms_label = [int(x) for x in label_str.split(',')]
+            parsed_labels.append([ad_label, ms_label])
+        labels = np.array(parsed_labels)
+    else:
+        labels = np.array(labels)
+    ages = np.array(ages)
+
+    has_positive = (labels[:, 0] == 1) | (labels[:, 1] == 1)
+    positive_indices = np.where(has_positive)[0]
+
+    is_double_negative = (labels[:, 0] == 0) & (labels[:, 1] == 0)
+    double_negative_indices = np.where(is_double_negative)[0]
+    for seed in seeds:
+        np.random.seed(seed)
+
+        pos_indices_shuffled = positive_indices.copy()
+        np.random.shuffle(pos_indices_shuffled)
+        train_pos_size = int(len(pos_indices_shuffled) * 0.8)
+        train_pos_data = pos_indices_shuffled[:train_pos_size]
+        remaining_pos = pos_indices_shuffled[train_pos_size:]
+        val_pos_size = len(remaining_pos) // 2
+        val_pos_data = remaining_pos[:val_pos_size]
+        test_pos_data = remaining_pos[val_pos_size:]
+
+        double_neg_shuffled = double_negative_indices.copy()
+        np.random.shuffle(double_neg_shuffled)
+        train_neg_size = int(len(double_neg_shuffled) * 0.8)
+        train_neg_data = double_neg_shuffled[:train_neg_size] 
+        remaining_neg = double_neg_shuffled[train_neg_size:]
+        high_age_neg = remaining_neg[ages[remaining_neg] >= age_threshold]
+        val_neg_size = len(high_age_neg) // 2
+        val_neg_data = high_age_neg[:val_neg_size]
+        test_neg_data = high_age_neg[val_neg_size:]
+        train_indices = np.concatenate((train_pos_data, train_neg_data))
+        val_indices = np.concatenate((val_pos_data, val_neg_data))
+        test_indices = np.concatenate((test_pos_data, test_neg_data))
+        np.random.shuffle(train_indices)
+        np.random.shuffle(val_indices)
+        np.random.shuffle(test_indices)
+        splits.append((train_indices, val_indices, test_indices))
+    
+    return splits
+
 def check_data(info_df, train_indices, val_indices, test_indices, run_id, age_threshold):
     print(f"\nSplit {run_id} Data Distribution:")
     print(f"Train set: {len(train_indices)} samples")
@@ -86,6 +144,43 @@ def check_data(info_df, train_indices, val_indices, test_indices, run_id, age_th
     print(f"Pos/Neg: {np.sum(info_df.loc[test_indices, 'label'] == 1)}/"
         f"{np.sum(info_df.loc[test_indices, 'label'] == 0)}")
     print(f"Positive ratio: {np.mean(info_df.loc[test_indices, 'label'] == 1):.3f}")
+
+def check_data_mix(info_df, train_indices, val_indices, test_indices, run_id, age_threshold):
+    """Check data distribution for multi-label dataset"""
+    print(f"\nSplit {run_id} Data Distribution:")
+    
+    def parse_labels(labels):
+        if isinstance(labels.iloc[0], str):
+            parsed = []
+            for label in labels:
+                label_str = label.strip('[]')
+                ad_label, ms_label = [int(x) for x in label_str.split(',')]
+                parsed.append([ad_label, ms_label])
+            return np.array(parsed)
+        return np.array(labels.tolist())
+    
+    train_labels = parse_labels(info_df.loc[train_indices, 'label'])
+    val_labels = parse_labels(info_df.loc[val_indices, 'label'])
+    test_labels = parse_labels(info_df.loc[test_indices, 'label'])
+    
+    train_pos = np.sum((train_labels[:, 0] == 1) | (train_labels[:, 1] == 1))
+    train_neg = np.sum((train_labels[:, 0] == 0) & (train_labels[:, 1] == 0))
+    val_pos = np.sum((val_labels[:, 0] == 1) | (val_labels[:, 1] == 1))
+    val_neg = np.sum((val_labels[:, 0] == 0) & (val_labels[:, 1] == 0))
+    test_pos = np.sum((test_labels[:, 0] == 1) | (test_labels[:, 1] == 1))
+    test_neg = np.sum((test_labels[:, 0] == 0) & (test_labels[:, 1] == 0))
+    
+    print(f"Train set: {len(train_indices)} samples")
+    print(f"Pos/Neg: {train_pos}/{train_neg}")
+    print(f"Positive ratio: {train_pos/len(train_indices):.3f}")
+    
+    print(f"\nValidation set: {len(val_indices)} samples")
+    print(f"Pos/Neg: {val_pos}/{val_neg}")
+    print(f"Positive ratio: {val_pos/len(val_indices):.3f}")
+    
+    print(f"\nTest set (age >= {age_threshold}): {len(test_indices)} samples")
+    print(f"Pos/Neg: {test_pos}/{test_neg}")
+    print(f"Positive ratio: {test_pos/len(test_indices):.3f}")
 
 def plot_pr_curves(results_bce, results_kd, run_id, save_path):
     """Plot and save PR curves"""
@@ -320,4 +415,17 @@ def mixup(inputs, labels, alpha=0.4):
     mixed_labels = lam * labels + (1 - lam) * labels[index]
     return mixed_inputs, mixed_labels, lam
     
-    
+def asym_noise(labels, asym_noise_ratio): # labels: pd.DataFrame
+    pos_indices = np.where(labels == 1)[0]
+    n_pos = len(pos_indices)
+    n_noise = int(n_pos * asym_noise_ratio)
+    noise_indices = np.random.choice(pos_indices, size=n_noise, replace=False)
+    labels.iloc[noise_indices] = 0
+    return labels, noise_indices
+
+# if __name__ == "__main__":
+#     np.random.seed(22)
+#     labels = pd.DataFrame({'label': [1, 1, 1, 1, 1, 1, 1, 1, 1, 1]})
+#     labels, noise_indices = asym_noise(labels, 0.5)
+#     print(labels)
+#     print(noise_indices)

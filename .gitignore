@@ -5,13 +5,16 @@ old_data/
 *.pth
 plots/
 experiments/
+GeneSCF/
 *.ipynb
 plots/
 demo.py
+demo_v2.py
+check_overlap.py
 .vscode/
 ## src
 src/analyze_age_matrix_2.py
-src/crtt.py
+src/ctrr.py
 src/demo.py
 src/extract_file.py
 src/extract_file_combined.py

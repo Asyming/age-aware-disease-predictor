@@ -54,7 +54,7 @@ class Trainer:
                     if isinstance(self.model, (AgeAwareMLP1, AgeAwareMLP2)):
                         logits, _, _ = self.model(inputs, ages, labels)
                     elif isinstance(self.model, (AgeUGP_v1, AgeUGP_v2)):
-                         logits, _, _ = self.model(inputs, self.snp_ids, self.batched_g, ages, labels)
+                         logits, _, _, _, _ = self.model(inputs, self.snp_ids, self.batched_g, self.gene_g, ages, labels)
                     elif isinstance(self.model, ctrMLP):
                          logits, _ = self.model(inputs, ages=ages, labels=labels)
                     elif isinstance(self.model, UGP_v1):
@@ -99,7 +99,7 @@ class Trainer:
                     outputs, _, norm_loss = self.model(mixup_inputs, ages, mixup_labels)
                     loss = self.criterion(outputs, mixup_labels) + self.norm_weight * norm_loss
                 elif isinstance(self.model, (AgeUGP_v1, AgeUGP_v2)):
-                    outputs, _, norm_loss = self.model(mixup_inputs, self.snp_ids, self.batched_g, ages, mixup_labels)
+                    outputs, _, norm_loss, _, _ = self.model(mixup_inputs, self.snp_ids, self.batched_g, self.gene_g, ages, mixup_labels)
                     loss = self.criterion(outputs, mixup_labels) + self.norm_weight * norm_loss
                 elif isinstance(self.model, ctrMLP):
                     outputs, norm_loss = self.model(mixup_inputs, ages=ages, labels = mixup_labels)
@@ -126,13 +126,31 @@ class Trainer:
             else:
                 if isinstance(self.model, (AgeAwareMLP1, AgeAwareMLP2)):
                     outputs, _, norm_loss = self.model(inputs, ages, labels)
-                    loss = self.criterion(outputs, labels) + self.norm_weight * norm_loss
+                    main_loss = self.criterion(outputs, labels)
+                    loss = main_loss + self.norm_weight * norm_loss
+                    
+                    # Print loss breakdown
+                    if (step + 1) % self.log_interval == 0:
+                        print(f"[Loss Breakdown] Main: {main_loss.item():.4f}, Norm: {norm_loss.item():.4f}, Total: {loss.item():.4f}")
+                    
                 elif isinstance(self.model, (AgeUGP_v1, AgeUGP_v2)):
-                    outputs, _, norm_loss = self.model(inputs, self.snp_ids, self.batched_g, ages, labels)
-                    loss = self.criterion(outputs, labels) + self.norm_weight * norm_loss
+                    outputs, _, norm_loss, _, _ = self.model(inputs, self.snp_ids, self.batched_g, self.gene_g, ages, labels)
+                    main_loss = self.criterion(outputs, labels)
+                    loss = main_loss + self.norm_weight * norm_loss
+                    
+                    # Print loss breakdown
+                    if (step + 1) % self.log_interval == 0:
+                        print(f"[Loss Breakdown] Main: {main_loss.item():.4f}, Norm: {norm_loss.item():.4f}, Total: {loss.item():.4f}")
+                    
                 elif isinstance(self.model, ctrMLP):
                     outputs, norm_loss = self.model(inputs, ages=ages, labels = labels)
-                    loss = self.criterion(outputs, labels) + self.norm_weight * norm_loss
+                    main_loss = self.criterion(outputs, labels)
+                    loss = main_loss + self.norm_weight * norm_loss
+                    
+                    # Print loss breakdown
+                    if (step + 1) % self.log_interval == 0:
+                        print(f"[Loss Breakdown] Main: {main_loss.item():.4f}, Contrast: {norm_loss.item():.4f}, Total: {loss.item():.4f}")
+                    
                 elif isinstance(self.model, UGP_v1):
                     outputs, _ = self.model(inputs, self.snp_ids, self.batched_g)
                     loss = self.criterion(outputs, labels)
@@ -143,15 +161,26 @@ class Trainer:
                     loss2 = self.criterion(nonlinear_preds, labels)
                     loss3 = self.criterion(outputs, labels)
                     loss = loss1 + loss2 + loss3
+                    
+                    # Print loss breakdown
+                    if (step + 1) % self.log_interval == 0:
+                        print(f"[Loss Breakdown] Linear: {loss1.item():.4f}, Nonlinear: {loss2.item():.4f}, Combined: {loss3.item():.4f}, Total: {loss.item():.4f}")
+                    
                 elif isinstance(self.model, UGP_v3):
                     outputs, _, _ = self.model(inputs, self.snp_ids, self.batched_g, self.gene_g)
                     loss = self.criterion(outputs, labels)
                 elif isinstance(self.model, ctrUGP_v1):
                     outputs, _, _, norm_loss = self.model(inputs, self.snp_ids, self.batched_g, self.gene_g, ages=ages, labels=labels)
-                    loss = self.criterion(outputs, labels) + self.norm_weight * norm_loss
+                    main_loss = self.criterion(outputs, labels)
+                    loss = main_loss + self.norm_weight * norm_loss
+                    
+                    # Print loss breakdown
+                    if (step + 1) % self.log_interval == 0:
+                        print(f"[Loss Breakdown] Main: {main_loss.item():.4f}, Contrast: {norm_loss.item():.4f}, Total: {loss.item():.4f}")
+                    
                 elif isinstance(self.model, MLP): # Basic MLP
                     outputs = self.model(inputs)
-                    loss = self.criterion(outputs, labels)                
+                    loss = self.criterion(outputs, labels)
 
             loss.backward()
             gradient_clipping(self.model, self.gradnorm_queue)
@@ -234,7 +263,7 @@ class Trainer:
                 elif isinstance(self.model, UGP_v3):
                     logits, _, _ = self.model(inputs, snp_ids=self.snp_ids, batched_g=self.batched_g, gene_g=self.gene_g)
                 elif isinstance(self.model, (AgeUGP_v1, AgeUGP_v2)):
-                    logits = self.model(inputs, snp_ids=self.snp_ids, batched_g=self.batched_g, ages=ages)
+                    logits, _, _ = self.model(inputs, snp_ids=self.snp_ids, batched_g=self.batched_g, gene_g=self.gene_g)
                 elif isinstance(self.model, ctrUGP_v1):
                     logits, _, _, _ = self.model(inputs, snp_ids=self.snp_ids, batched_g=self.batched_g, gene_g=self.gene_g, ages=ages)
 
@@ -251,6 +280,188 @@ class Trainer:
                 'predictions': logits.cpu(),
                 'labels': labels.cpu()
             }
+        return results
+
+class Trainer_mix:
+    def __init__(self, model, criterion, optimizer, device, model_name, save_dir, args=None):
+        self.model = model.to(device)
+        self.criterion = criterion  # BCEWithLogitsLoss
+        self.optimizer = optimizer
+        self.device = device
+        self.model_name = model_name
+        self.save_dir = save_dir
+        os.makedirs(self.save_dir, exist_ok=True)
+        
+        self.auroc_ad = AUROC(task='binary').to(device)
+        self.auroc_ms = AUROC(task='binary').to(device)
+        self.ap_ad = AveragePrecision(task='binary').to(device)
+        self.ap_ms = AveragePrecision(task='binary').to(device)
+        
+        self.args = args
+        self.age_threshold = getattr(args, 'age_threshold', 65)
+        self.use_label_correction = getattr(args, 'use_label_correction', False)
+        self.eval_interval = getattr(args, 'eval_interval', 10)
+        self.n_steps = getattr(args, 'n_steps', 20000)
+        self.n_early_stop = getattr(args, 'n_early_stop', 10)
+        self.log_interval = getattr(args, 'log_interval', 20)
+        self.pseudo_label_interval = getattr(args, 'pseudo_label_interval', 20)
+        self.pseudo_label_start_step = getattr(args, 'pseudo_label_start_step', 200)
+        self.eta = getattr(args, 'eta', 0.1)
+        
+        self.gradnorm_queue = GradientQueue(maxlen=32)
+        for _ in range(self.gradnorm_queue.maxlen):
+            self.gradnorm_queue.add(1.0)
+            
+        self.use_mixup = getattr(args, 'use_mixup', False)
+        self.mixup_alpha = getattr(args, 'mixup_alpha', 0.3)
+
+    def parse_multi_label(self, label_str):
+        if isinstance(label_str, str):
+            label_str = label_str.strip('[]')
+            labels = [int(x) for x in label_str.split(',')]
+            return torch.tensor(labels, dtype=torch.float32)
+        else:
+            return torch.tensor(label_str, dtype=torch.float32)
+
+    def train(self, train_loader, val_loader, test_loader, es_window=3):
+        print(f"----------------Training {self.model_name} (Multi-label)----------------")
+        running_loss, val_scores = [], []
+        cur_early_stop, best_score, step, test_results = 0, 0, 0, {}
+
+        for inputs, labels, ages in train_loader:
+            self.model.train()
+            step += 1
+            inputs = inputs.to(self.device)
+            ages = ages.to(self.device)
+            
+            if isinstance(labels[0], str):
+                parsed_labels = []
+                for label in labels:
+                    parsed_labels.append(self.parse_multi_label(label))
+                labels = torch.stack(parsed_labels).to(self.device)
+            else:
+                labels = labels.to(self.device)
+            
+            if labels.dim() == 1:
+                labels = labels.unsqueeze(1)
+
+            # if self.use_label_correction and step >= self.pseudo_label_start_step and step % self.pseudo_label_interval == 0:
+            #     print(0)
+
+            self.optimizer.zero_grad()
+            
+            if self.use_mixup:
+                mixup_inputs, mixup_labels, _ = mixup(inputs, labels, self.mixup_alpha)
+                outputs = self.model(mixup_inputs)
+                loss = self.criterion(outputs, mixup_labels)
+            else:
+                outputs = self.model(inputs)
+                loss = self.criterion(outputs, labels)
+
+            loss.backward()
+            gradient_clipping(self.model, self.gradnorm_queue)
+            self.optimizer.step()
+            running_loss.append(loss.item())
+
+            if (step + 1) % self.log_interval == 0:
+                log_msg = f"[{step + 1}] loss: {np.mean(running_loss):.3f}"
+                print(log_msg, flush=True)
+                running_loss = []
+
+            if (step + 1) % self.eval_interval == 0:
+                print("----------------Validating----------------", flush=True)
+                val_metrics = self.evaluate(val_loader)
+                
+                avg_auprc = (val_metrics['auprc_ad'] + val_metrics['auprc_ms']) / 2
+                val_scores.append(avg_auprc)
+                
+                if len(val_scores) > es_window:
+                    val_scores.pop(0)
+                avg_score = np.mean(val_scores)
+
+                improved = False
+                if avg_score > best_score:
+                    best_score = avg_score
+                    improved = True
+                    cur_early_stop = 0
+                elif avg_score <= best_score and avg_auprc > best_score:
+                    best_score = avg_auprc
+                    improved = True
+                    cur_early_stop = 0
+                else:
+                    cur_early_stop += 1
+
+                if improved:
+                    test_metrics = self.evaluate(test_loader)
+                    test_results = test_metrics
+                    save_dict = {
+                        'model_state_dict': self.model.state_dict(),
+                        'test_metrics': test_metrics,
+                        'val_avg_auprc': best_score
+                    }
+                    torch.save(save_dict, os.path.join(self.save_dir, f'{self.model_name}.pth'))
+
+                if cur_early_stop >= self.n_early_stop:
+                    print(f'\nEarly stopping triggered after {self.n_early_stop} evaluations without improvement.')
+                    print(f'Best val avg AUPRC: {best_score:.5f}')
+                    print(f'Test - AD: AUROC={test_results.get("auroc_ad", 0):.5f}, AUPRC={test_results.get("auprc_ad", 0):.5f}')
+                    print(f'Test - MS: AUROC={test_results.get("auroc_ms", 0):.5f}, AUPRC={test_results.get("auprc_ms", 0):.5f}')
+                    break
+
+                print(f"[{step+1}] test_auprc_ad: {test_metrics['auprc_ad']:.5f}, test_auprc_ms: {test_metrics['auprc_ms']:.5f}")
+                print(f"[{step+1}] avg_val_auprc: {avg_auprc:.5f}, avg_score: {avg_score:.5f}, best_score: {best_score:.5f}, test_auprc: {(test_metrics['auprc_ad'] + test_metrics['auprc_ms'])/2:.5f}, es_counter: {cur_early_stop}/{self.n_early_stop}", flush=True)
+                print("----------------Training----------------", flush=True)
+                self.model.train()
+
+            if step >= self.n_steps:
+                break
+
+        best_checkpoint_path = os.path.join(self.save_dir, f'{self.model_name}.pth')
+        checkpoint = torch.load(best_checkpoint_path, map_location=self.device, weights_only=False)
+        return checkpoint
+
+    def evaluate(self, data_loader):
+        with torch.no_grad():
+            self.model.eval()
+            all_logits, all_labels = [], []
+
+            for inputs, labels, ages in data_loader:
+                inputs = inputs.to(self.device)
+                ages = ages.to(self.device)
+
+                if isinstance(labels[0], str):
+                    parsed_labels = []
+                    for label in labels:
+                        parsed_labels.append(self.parse_multi_label(label))
+                    labels = torch.stack(parsed_labels).to(self.device)
+                else:
+                    labels = labels.to(self.device)
+                
+                if labels.dim() == 1:
+                    labels = labels.unsqueeze(1)
+
+                logits = self.model(inputs)  # (batch_size, 2)
+
+                all_logits.append(logits.detach())
+                all_labels.append(labels.detach())
+
+            logits = torch.cat(all_logits)  # (total_samples, 2)
+            labels = torch.cat(all_labels)  # (total_samples, 2)
+
+            logits_ad, logits_ms = logits[:, 0], logits[:, 1]
+            labels_ad, labels_ms = labels[:, 0].long(), labels[:, 1].long()
+
+            results = {
+                'auroc_ad': self.auroc_ad(logits_ad, labels_ad).item(),
+                'auroc_ms': self.auroc_ms(logits_ms, labels_ms).item(), 
+                'auprc_ad': self.ap_ad(logits_ad, labels_ad).item(),
+                'auprc_ms': self.ap_ms(logits_ms, labels_ms).item(),
+                'predictions_ad': logits_ad.cpu(),
+                'predictions_ms': logits_ms.cpu(),
+                'labels_ad': labels_ad.cpu(),
+                'labels_ms': labels_ms.cpu()
+            }
+
         return results
 
 class KDTrainer:
@@ -310,7 +521,7 @@ class KDTrainer:
                  elif isinstance(self.teacher_model, (AgeAwareMLP1, AgeAwareMLP2)):
                      teacher_logits, _, _ = self.teacher_model(inputs, ages, labels)
                  elif isinstance(self.teacher_model, (AgeUGP_v1, AgeUGP_v2)):
-                     teacher_logits, _, _ = self.teacher_model(inputs, self.snp_ids, self.batched_g, ages, labels)
+                     teacher_logits, _, _, _, _ = self.teacher_model(inputs, self.snp_ids, self.batched_g, self.gene_g, ages, labels)
                  elif isinstance(self.teacher_model, ctrMLP):
                      teacher_logits, _ = self.teacher_model(inputs, ages=ages, labels=labels)
                  elif isinstance(self.teacher_model, ctrUGP_v1):
@@ -329,7 +540,7 @@ class KDTrainer:
                     elif isinstance(self.model, (AgeAwareMLP1, AgeAwareMLP2)):
                          student_logits_for_lc, _, _ = self.model(inputs, ages, labels)
                     elif isinstance(self.model, (AgeUGP_v1, AgeUGP_v2)):
-                         student_logits_for_lc, _, _ = self.model(inputs, self.snp_ids, self.batched_g, ages, labels)
+                         student_logits_for_lc, _, _, _, _ = self.model(inputs, self.snp_ids, self.batched_g, self.gene_g, ages, labels)
                     elif isinstance(self.model, UGP_v3):
                          student_logits_for_lc, _, _ = self.model(inputs, self.snp_ids, self.batched_g, self.gene_g)
                     elif isinstance(self.model, ctrMLP):
@@ -377,7 +588,7 @@ class KDTrainer:
                 student_logits, _, norm_loss = self.model(inputs, ages, labels)
                 loss = self.criterion(student_logits, labels, teacher_logits) + self.norm_weight * norm_loss
             elif isinstance(self.model, (AgeUGP_v1, AgeUGP_v2)):
-                student_logits, _, norm_loss = self.model(inputs, self.snp_ids, self.batched_g, ages, labels)
+                student_logits, _, norm_loss, _, _ = self.model(inputs, self.snp_ids, self.batched_g, self.gene_g, ages, labels)
                 loss = self.criterion(student_logits, labels, teacher_logits) + self.norm_weight * norm_loss
             elif isinstance(self.model, UGP_v3):
                 student_logits, _, _ = self.model(inputs, self.snp_ids, self.batched_g, self.gene_g)
@@ -471,7 +682,7 @@ class KDTrainer:
                 elif isinstance(self.model, UGP_v3):
                     logits, _, _ = self.model(inputs, snp_ids=self.snp_ids, batched_g=self.batched_g, gene_g=self.gene_g)
                 elif isinstance(self.model, (AgeUGP_v1, AgeUGP_v2)):
-                    logits = self.model(inputs, snp_ids=self.snp_ids, batched_g=self.batched_g, ages=ages)
+                    logits, _, _ = self.model(inputs, snp_ids=self.snp_ids, batched_g=self.batched_g, gene_g=self.gene_g)
                 elif isinstance(self.model, ctrUGP_v1):
                     logits, _, _, _ = self.model(inputs, snp_ids=self.snp_ids, batched_g=self.batched_g, gene_g=self.gene_g, ages=ages)
 
